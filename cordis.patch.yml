@@ -1,0 +1,74 @@
+# dsh-write-guard bundle patch: insert this plugin's loader entry into a
+# profile layer. Bundle patches add rows via `insert`; a top-level row would be
+# read as an id-targeted override of an existing entry and fail with
+# "entry not found".
+#
+# Every config key is optional; defaults are applied by the plugin.
+- insert:
+    - id: write-guard
+      name: dsh-write-guard
+      config:
+        # enforce | dry-run | off
+        mode: enforce
+        # 0-100: >= block -> deny, >= ask -> approval seam
+        blockThreshold: 70
+        askThreshold: 40
+
+        # --- scan budget ---------------------------------------------------
+        # UTF-8 bytes scanned per write; beyond it the prefix is scanned and
+        # truncatePolicy decides (ask is the safe default).
+        maxScanBytes: 524288
+        truncatePolicy: ask
+        # Hard ceiling: a larger payload is never scanned, only asked about.
+        maxContentBytes: 33554432
+        # Post-write verification reads at most this many bytes.
+        maxVerifyBytes: 8388608
+
+        # --- path policy ---------------------------------------------------
+        scriptPolicy: ask            # ask | allow | deny — bare .ps1/.bat/.cmd/.sh
+        docPolicy: downgrade         # downgrade | enforce — docs quoting commands
+        blockBinaries: true
+        # Paths that bypass every check. Empty by default: node_modules,
+        # .git hooks and build output are common malware drop locations too.
+        ignorePaths: []
+
+        # --- rules ---------------------------------------------------------
+        allowRules: []
+        # Project rules file. Empty = discover write-guard.rules.json from the
+        # session cwd upward.
+        rulesFile: ''
+        watchRules: true
+
+        # --- shell writes --------------------------------------------------
+        # Parse bash/pwsh commands for heredocs, echo/printf/tee, content
+        # cmdlets, downloads and archive extraction.
+        shellGuard: true
+        # ask | allow — policy when the bytes cannot be inspected (download,
+        # extract, tee, pipeline) or the target is dynamic/script/executable.
+        shellUnknownPolicy: ask
+
+        # --- post-write verification --------------------------------------
+        verifyWrites: true
+        verifyPolicy: block          # block | audit — on hash mismatch
+        # Re-scan the complete file after an edit/append; a payload split
+        # across several writes only becomes visible here.
+
+        # --- content heuristics -------------------------------------------
+        entropy: true
+        entropyThreshold: 4.5
+        entropyMinLength: 200
+        homoglyph: true              # fold Cyrillic/Greek confusables
+
+        # --- evidence ------------------------------------------------------
+        quarantine: true
+        audit: true
+        auditHashChain: true         # prev/hash on every audit record
+        auditMaxBytes: 5242880
+        integrity: true              # fingerprint the plugin's own files
+
+        # --- notifications -------------------------------------------------
+        notify: false
+        # Runs with WG_MESSAGE in the environment; the message is never
+        # interpolated into the command line.
+        notifyCommand: ''
+        notifyMinScore: 70
