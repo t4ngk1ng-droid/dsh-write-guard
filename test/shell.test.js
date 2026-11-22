@@ -421,3 +421,32 @@ test('a non-shell interpreter behind a pipe is opaque', () => {
   const extracted = extractShellWrites('bash', { command })
   assert.equal(extracted.unknown[0].source, 'stdin-script')
 })
+
+test('a PowerShell here-string body is not scanned as shell', () => {
+  const command = [
+    "python -c @'",
+    "import re",
+    "m = re.search(r'\s*<([0-9A-Fa-f]+)>', s)",
+    "print(d[0:])",
+    "print(d[j:])",
+    "'@",
+  ].join('\n')
+  assert.equal(extractShellWrites('pwsh', { command }), null)
+})
+
+test('a here-string keeps a real redirect outside its body', () => {
+  const command = ["@'", 'data', "'@ > out.txt"].join('\n')
+  const extracted = extractShellWrites('pwsh', { command })
+  assert.deepEqual(extracted.unknown.map((w) => w.path), ['out.txt'])
+})
+
+test('a here-string piped to bash is still parsed as a script', () => {
+  const command = ["@'", 'echo hi > inner.txt', "'@ | bash"].join('\n')
+  const extracted = extractShellWrites('pwsh', { command })
+  assert.deepEqual(extracted.known.map((w) => w.path), ['inner.txt'])
+})
+
+test('an unterminated here-string masks its body', () => {
+  const command = ["python -c @'", 'if a > b: pass', 'print(d[0:])'].join('\n')
+  assert.equal(extractShellWrites('pwsh', { command }), null)
+})

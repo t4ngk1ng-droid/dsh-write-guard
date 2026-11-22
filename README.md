@@ -204,7 +204,7 @@ cd dsh-write-guard
 node --test
 ```
 
-**189 个单元测试**覆盖：正常放行、脚本转人工、下载执行/持久化/凭证/反弹 Shell、进程替换与 `eval` 下载执行、双扩展名、Win32 尾点、二进制、全角/零宽/西里尔混淆、文档降级与自定义规则不被降级、PE/ELF/ZIP 文件头、归档、硬上限、UTF-8 截断、熵检测、shell heredoc（两种顺序、数据正文遮罩、脚本正文递归、非 shell 正文转人工）/echo/printf/tee/Tee-Object/Set-Content/Add-Content/Out-File/Set-Item/WriteAllText/New-Item/下载（含 `irm`、certutil、bitsadmin）/解压默认目录/引号感知重定向/动态路径、PowerShell 参数任意顺序与非字面量值、自定义规则编译与 ReDoS 拒绝、哈希链、自校验基线/篡改/版本升级、写后校验/篡改/缺失/超限/UTF-16 解码、配置默认值。
+**193 个单元测试**覆盖：正常放行、脚本转人工、下载执行/持久化/凭证/反弹 Shell、进程替换与 `eval` 下载执行、双扩展名、Win32 尾点、二进制、全角/零宽/西里尔混淆、文档降级与自定义规则不被降级、PE/ELF/ZIP 文件头、归档、硬上限、UTF-8 截断、熵检测、shell heredoc（两种顺序、数据正文遮罩、脚本正文递归、非 shell 正文转人工）/PowerShell here-string（正文遮罩、管道给 shell 递归、未闭合）/echo/printf/tee/Tee-Object/Set-Content/Add-Content/Out-File/Set-Item/WriteAllText/New-Item/下载（含 `irm`、certutil、bitsadmin）/解压默认目录/引号感知重定向/动态路径、PowerShell 参数任意顺序与非字面量值、自定义规则编译与 ReDoS 拒绝、哈希链、自校验基线/篡改/版本升级、写后校验/篡改/缺失/超限/UTF-16 解码、配置默认值。
 
 集成冒烟测试真实 mount 插件并调用两个 waterfall：
 
