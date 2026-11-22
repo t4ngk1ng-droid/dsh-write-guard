@@ -450,3 +450,31 @@ test('an unterminated here-string masks its body', () => {
   const command = ["python -c @'", 'if a > b: pass', 'print(d[0:])'].join('\n')
   assert.equal(extractShellWrites('pwsh', { command }), null)
 })
+
+test('nested double quotes inside python -c are not redirects', () => {
+  const command = [
+    'python -c "',
+    'import re',
+    'm = re.search(r"<([^>]+)>", raw)',
+    'if not m:',
+    '    print("none")',
+    '"',
+  ].join('\n')
+  assert.equal(extractShellWrites('pwsh', { command }), null)
+})
+
+test('python -c keeps a redirect that follows the script', () => {
+  const command = 'python -c "print(1)" > out.txt'
+  const extracted = extractShellWrites('pwsh', { command })
+  assert.deepEqual(extracted.unknown.map((w) => w.path), ['out.txt'])
+})
+
+test('python -c slice notation is not a redirect', () => {
+  const command = 'python -c "print(d[0:]); print(d[j:])"'
+  assert.equal(extractShellWrites('pwsh', { command }), null)
+})
+
+test('node -e comparison operators are not redirects', () => {
+  const command = 'node -e "console.log(1 > 0)"'
+  assert.equal(extractShellWrites('pwsh', { command }), null)
+})
