@@ -5,3 +5,4 @@ node_modules/
 
 *-审查包.md
 *-审查说明.md
+_*.mjs
