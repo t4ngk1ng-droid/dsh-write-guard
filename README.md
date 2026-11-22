@@ -55,18 +55,23 @@ tools/post-execute
 
 ## 安装
 
-```bash
-dsh plugin --profile web add dsh-write-guard
-```
-
-桌面版在 **设置 → 插件市场** 搜索 `dsh-write-guard`，或用「自定义安装」指向由当前源码重新打包的 tgz（仓库里遗留的旧包不代表当前源码）。`desktop` profile 由 Electron 独占管理，CLI 不能直接写入。
-
-从源码本地安装：
+尚未发布到 npm 和插件市场，从仓库安装：
 
 ```bash
 git clone https://github.com/t4ngk1ng-droid/dsh-write-guard.git
 dsh plugin --profile web add file:./dsh-write-guard
 ```
+
+`add` 在 Windows 上依赖 pnpm；没有的话先 `corepack enable pnpm`。
+
+桌面版（`desktop` profile 由 Electron 独占，CLI 不能写入）：
+
+1. `npm pack` 生成 tgz，或直接复制仓库目录
+2. 解压到 `~/.dsh/profiles/desktop/node_modules/dsh-write-guard`
+3. 在 `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加 `"dsh-write-guard": "file:../../plugins/dsh-write-guard"`，并把 `dsh-write-guard` 加进 `dsh.profile.bundles`
+4. 在 `cordis.patch.yml` 里设 `- id: write-guard` + `config.mode: dry-run`，重启后切 `enforce`
+
+首次运行会在 `~/.dsh/write-guard/` 下建完整性基线；**升级版本后必须删除该目录的 `integrity.json` 再重启**，否则会报 `tampered`（这是设计行为，不是 bug）。
 
 ## 配置
 
