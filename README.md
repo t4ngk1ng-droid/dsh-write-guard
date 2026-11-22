@@ -188,7 +188,7 @@ notifyCommand: powershell -NoProfile -Command "New-BurntToastNotification -Text 
 3. **不扫描磁盘上已有的文件。** 只管"这次要写什么"和"刚写完的是什么"；已落盘的二进制请用 Windows Defender 或 `dsh-secure-audit`。
 4. **`ask` 之后由审批链决定。** 配了 `dsh-auto-review` 是第二个模型在答，否则是你本人。
 5. **超限只扫前缀。** `truncatePolicy: allow` 会明确承担未扫描后缀的风险。
-6. **Shell 目标缺失仍按 fail-closed 阻断。** `write`/`edit` 与 shell 写入在 `verifyPolicy: block` 下都要求目标存在；shell 的报错文案会说明命令可能失败，或路径在 shell 自己的命名空间（Git Bash 的 `/tmp`、`$env:TEMP`）中被解析。动态路径（变量、命令替换、glob）不进入写后校验，pre-execute 已按未知/动态写入转人工。
+6. **成功执行不等于每个分支都写了文件。** `verifyPolicy: block` 下，普通写入缺失仍阻断。对于 Bash 中能静态判断的短路（如 `test -d . || …`），仅宽免未执行分支的 `ENOENT`；已有目标仍重扫，不能判定的分支仍须校验。`cd sub && …` 中的相对目标按 `sub` 校验；目录依赖变量或条件合流而不能确定时，按动态目标策略处理，不猜测落盘位置。PowerShell 内置 cmdlet 明确生效的 `-WhatIf` 和非文件 `Env:` 写入不登记为文件，外层重定向仍单独检查。
 7. **写后校验有读取上限。** 大于 `maxVerifyBytes`（默认 8 MB）的目标无法读回校验，`verifyPolicy: block` 下会被阻断；要常规写入更大的文件，请调高该上限或改用 `audit`。
 
 ## 推荐组合
@@ -209,7 +209,7 @@ cd dsh-write-guard
 node --test
 ```
 
-**197 个单元测试**覆盖：正常放行、脚本转人工、下载执行/持久化/凭证/反弹 Shell、进程替换与 `eval` 下载执行、双扩展名、Win32 尾点、二进制、全角/零宽/西里尔混淆、文档降级与自定义规则不被降级、PE/ELF/ZIP 文件头、归档、硬上限、UTF-8 截断、熵检测、shell heredoc（两种顺序、数据正文遮罩、脚本正文递归、非 shell 正文转人工）/PowerShell here-string（正文遮罩、管道给 shell 递归、未闭合）/echo/printf/tee/Tee-Object/Set-Content/Add-Content/Out-File/Set-Item/WriteAllText/New-Item/下载（含 `irm`、certutil、bitsadmin）/解压默认目录/引号感知重定向/动态路径、PowerShell 参数任意顺序与非字面量值、自定义规则编译与 ReDoS 拒绝、哈希链、自校验基线/篡改/版本升级、python -c/node -e 内联代码、写后校验/篡改/缺失/超限/UTF-16 解码、配置默认值。
+**单元测试**覆盖命令参数与注释中的假目标、内联脚本后的真实重定向、预演与规则加载失败，以及：正常放行、脚本转人工、下载执行/持久化/凭证/反弹 Shell、进程替换与 `eval` 下载执行、双扩展名、Win32 尾点、二进制、全角/零宽/西里尔混淆、文档降级与自定义规则不被降级、PE/ELF/ZIP 文件头、归档、硬上限、UTF-8 截断、熵检测、shell heredoc（两种顺序、数据正文遮罩、脚本正文递归、非 shell 正文转人工）/PowerShell here-string（正文遮罩、管道给 shell 递归、未闭合）/echo/printf/tee/Tee-Object/Set-Content/Add-Content/Out-File/Set-Item/WriteAllText/New-Item/下载（含 `irm`、certutil、bitsadmin）/解压默认目录/引号感知重定向/动态路径、PowerShell 参数任意顺序与非字面量值、自定义规则编译与 ReDoS 拒绝、哈希链、自校验基线/篡改/版本升级、python -c/node -e 内联代码、写后校验/篡改/缺失/超限/UTF-16 解码、配置默认值。
 
 集成冒烟测试真实 mount 插件并调用两个 waterfall：
 
@@ -217,7 +217,7 @@ node --test
 node scripts/smoke.mjs
 ```
 
-**56 条断言**覆盖：工具注册、恶意 PowerShell 拒绝、`.exe` 拒绝、`edit` 只看替换内容、shell 重定向载荷拒绝、低风险重定向放行、`tee` 转人工、动态路径转人工且不进入写后校验、`mode=off` 完全放行、写后哈希一致接受、篡改拒绝、无 `callId` 拒绝、已批准脚本放行、工具失败且未写入不误报、失败但已写入仍扫描、缺失文件阻断、Shell 目标缺失阻断、Shell 写后重扫、超单次扫描上限的完整文件检测、只读工具按会话 cwd 加载项目规则。
+**冒烟断言**覆盖根目录与子目录同名文件、条件写入是否实际落盘，以及：工具注册、恶意 PowerShell 拒绝、`.exe` 拒绝、`edit` 只看替换内容、shell 重定向载荷拒绝、低风险重定向放行、`tee` 转人工、动态路径转人工且不进入写后校验、`mode=off` 完全放行、写后哈希一致接受、篡改拒绝、无 `callId` 拒绝、已批准脚本放行、工具失败且未写入不误报、失败但已写入仍扫描、缺失文件阻断、Shell 目标缺失阻断、Shell 写后重扫、超单次扫描上限的完整文件检测、只读工具按会话 cwd 加载项目规则。
 
 ## License
 

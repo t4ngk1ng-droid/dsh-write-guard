@@ -638,6 +638,16 @@ test('magic matching is case-sensitive and printable MZ prose is allowed', () =>
   assert.equal(detectMagic('MZ\u0090\u0000\u0003\u0000').id, 'pe')
 })
 
+test('printable French text after MZ is not a PE header', () => {
+  const text = 'MZ — résumé de l’été à Montréal : coût 20 €.'
+  assert.equal(detectMagic(text), null)
+  assert.equal(write('notes.txt', text).decision, 'allow')
+})
+
+test('a C1 control byte after MZ still signals PE without a NUL', () => {
+  assert.equal(detectMagic('MZ\u0090X').id, 'pe')
+})
+
 test('binary detection follows the configured scan budget', () => {
   const c = normalizeConfig({ maxScanBytes: 1024 * 1024, maxContentBytes: 2 * 1024 * 1024, audit: false, quarantine: false })
   const r = write('payload.log', `${'A'.repeat(600000)}\0`, c)

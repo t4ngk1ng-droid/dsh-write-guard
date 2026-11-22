@@ -24,7 +24,7 @@
  */
 
 import { readFileSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { normalizeConfig } from './lib/config.js'
@@ -54,6 +54,7 @@ const UNKNOWN_CONTENT_SOURCES = new Set([
   'download',
   'extract',
   'tee',
+  'echo',
   'printf',
   'out-file',
   'set-content',
@@ -293,7 +294,7 @@ export function apply(ctx, rawConfig = {}) {
     const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
     let verdict = 'allow'
     let reason = ''
-    /** @type {{ path: string, absPath: string, tool: string, expectedSha: string|null, decision: string }[]} */
+    /** @type {{ path: string, cwd: string, absPath: string, tool: string, expectedSha: string|null, decision: string, allowAbsent: boolean }[]} */
     const pendingVerify = []
     const rememberWrite = (write, tool, expectedSha, decision) => {
       if (!config.verifyWrites || config.mode === 'dry-run' || decision === 'deny') return
@@ -301,8 +302,12 @@ export function apply(ctx, rawConfig = {}) {
       // can open later; verifying it would report the wrong file as missing.
       if (write.dynamic) return
       const absPath = verifier.absolutePath(write.path, cwd)
-      if (pendingVerify.some((item) => item.absPath === absPath)) return
-      pendingVerify.push({ path: write.path, absPath, tool, expectedSha, decision })
+      const previous = pendingVerify.find((item) => item.absPath === absPath)
+      if (previous) {
+        if (!write.skipVerify) previous.allowAbsent = false
+        return
+      }
+      pendingVerify.push({ path: write.path, cwd, absPath, tool, expectedSha, decision, allowAbsent: !!write.skipVerify })
     }
 
     try {
@@ -333,11 +338,15 @@ export function apply(ctx, rawConfig = {}) {
 
       // --- shell writes ----------------------------------------------------
       if (config.shellGuard && SHELL_TOOL_NAMES.has(exec.name)) {
-        const extracted = extractShellWrites(exec.name, exec.arguments)
+        const extracted = extractShellWrites(exec.name, exec.arguments, cwd)
         if (extracted) {
           const rules = effectiveRules(cwd)
+          // Use one session-relative name for policy, audit and readback.
+          const inSession = (w) => w.baseDir && !isAbsolute(w.path)
+            ? { ...w, path: relative(cwd, resolve(w.baseDir, w.path)) || '.' } : w
 
-          for (const write of extracted.known) {
+          for (const candidate of extracted.known) {
+            const write = inSession(candidate)
             const scan = scanToolCall(
               { name: 'write', args: { file_path: write.path, content: write.content }, cwd },
               config,
@@ -350,7 +359,7 @@ export function apply(ctx, rawConfig = {}) {
             if (write.dynamic && scan.decision === 'allow') {
               scan.decision = 'ask'
               scan.score = Math.max(scan.score, config.askThreshold)
-              scan.reason = `write-guard 拦截（ask，风险分 ${scan.score}）：${write.path} 的路径含动态变量，无法确认最终目标`
+              scan.reason = `write-guard 拦截（ask，风险分 ${scan.score}）：${write.path} 的路径含动态变量或执行目录不确定，无法确认最终目标`
             }
             finalize(exec, scan, `shell:${write.source}`)
             stats.shellWrites++
@@ -361,7 +370,8 @@ export function apply(ctx, rawConfig = {}) {
             rememberWrite(write, exec.name, null, scan.decision)
           }
 
-          for (const write of extracted.unknown) {
+          for (const candidate of extracted.unknown) {
+            const write = inSession(candidate)
             const ext = extname(write.path)
             const riskyPath = BINARY_EXTENSIONS.has(ext) || SCRIPT_EXTENSIONS.has(ext)
             const needsApproval = write.dynamic || riskyPath || UNKNOWN_CONTENT_SOURCES.has(write.source)
@@ -382,7 +392,7 @@ export function apply(ctx, rawConfig = {}) {
               score: needsApproval ? config.askThreshold : 0,
               reason: needsApproval
                 ? write.dynamic
-                  ? `无法检查写入内容（${write.source}，路径含动态变量）`
+                  ? `无法检查写入内容（${write.source}，路径含动态变量或执行目录不确定）`
                   : `无法检查写入内容（${write.source}）`
                 : '低风险目标',
             }
@@ -412,7 +422,7 @@ export function apply(ctx, rawConfig = {}) {
       ctx.logger?.warn?.(`write-guard: scan failed for ${exec.name}: ${message}`)
       // Fail-open applies to the failed scan only; it must not erase a deny
       // already established for another target in the same tool call.
-      if (config.onScannerError !== 'allow') {
+      if (config.mode !== 'dry-run' && config.onScannerError !== 'allow') {
         verdict = worst(verdict, 'ask')
         reason = reason || `write-guard 扫描失败（${message}），需要人工确认本次写入`
       }
@@ -460,14 +470,14 @@ export function apply(ctx, rawConfig = {}) {
 
       // Only the "nothing was written" case is skipped for a failed tool.
       // An existing file still goes through the hash and full-file scan.
-      if (failed && verified.status === 'missing') {
+      if (verified.status === 'missing' && (failed || (info.allowAbsent && verified.code === 'ENOENT'))) {
         audit?.append({
           event: 'write-verify',
           tool: exec.name,
           callId: String(exec.callId ?? ''),
           target: info.path,
           status: 'skipped',
-          reason: 'tool result is an error and no file exists',
+          reason: failed ? 'tool result is an error and no file exists' : 'short-circuited shell branch and no file exists',
         })
         continue
       }
@@ -506,7 +516,7 @@ export function apply(ctx, rawConfig = {}) {
       // size. Otherwise "full rescan" silently becomes another prefix scan for
       // files larger than maxScanBytes.
       try {
-        const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
+        const cwd = info.cwd
         const rescanConfig = {
           ...config,
           maxScanBytes: Math.max(config.maxScanBytes, verified.size ?? 0),

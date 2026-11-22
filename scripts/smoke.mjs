@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, name, inject } from '../index.js'
@@ -318,6 +318,37 @@ const reloadTool = registered.find((d) => d.name === 'write_guard_reload')
 const reloadResult = await reloadTool.execute({}, { agent: { session: { header: { cwd: rulesDir } } } })
 assert.equal(reloadResult.ok, true)
 assert.equal(reloadResult.total, reloadResult.builtin + 1)
+
+// Resolve each write in the directory of its command, not just the session cwd.
+const work = mkdtempSync(join(tmpdir(), 'wg-smoke-flow-'))
+mkdirSync(join(work, 'sub'))
+writeFileSync(join(work, 'write-guard.rules.json'), JSON.stringify({ rules: [
+  { id: 'sub-marker', patterns: ['review-marker'], paths: ['sub/*.txt'], severity: 100 },
+] }))
+let flowId = 0
+async function checkShell(command, expectedPre, expectedPost = 'accept', tool = 'bash') {
+  const exec = { name: tool, callId: `flow-${++flowId}`, arguments: { command }, agent: { session: { header: { cwd: work } } } }
+  const before = await gate(exec, allow)
+  assert.equal(before.kind, expectedPre, `${command}: ${before.reason || 'pre'}`)
+  const after = await postGate(exec, {}, async () => ({ kind: 'accept' }))
+  assert.equal(after.kind, expectedPost, `${command}: ${after.feedback?.[0]?.text || 'post'}`)
+}
+writeFileSync(join(work, 'sub', 'version.txt'), 'ok')
+await checkShell('cd sub && node --version > version.txt', 'allow')
+writeFileSync(join(work, 'version.txt'), 'root decoy')
+writeFileSync(join(work, 'sub', 'version.txt'), 'review-marker')
+await checkShell('cd sub && node --version > version.txt', 'allow', 'block')
+await checkShell('echo ok > version.txt; cd sub && echo ok > version.txt', 'allow', 'block')
+await checkShell('cd sub && echo review-marker > version.txt', 'deny')
+await checkShell('cd "$BUILD_DIR" && node --version > version.txt', 'ask')
+await checkShell('test -d . || echo ok > optional.txt', 'allow')
+await checkShell('test -d . && echo ok > required.txt', 'allow', 'block')
+await checkShell('test -d . || echo ok > shared.txt; echo ok > shared.txt', 'allow', 'block')
+await checkShell('check-status || echo ok > uncertain.txt', 'allow', 'block')
+await checkShell('test -d . || echo ok > sub', 'allow', 'block') // directory is not ENOENT
+await checkShell("rg -F 'Set-Content -Path build.txt -Value ready' README.md", 'allow')
+await checkShell('Set-Content -Path plan.txt -Value ok -WhatIf', 'allow', 'accept', 'pwsh')
+await checkShell('Set-Item Env:BUILD_MODE dev', 'allow', 'accept', 'pwsh')
 
 console.log('smoke: integration assertions passed')
 console.log(`smoke: registered=${registered.map((d) => d.name).join(',')}`)

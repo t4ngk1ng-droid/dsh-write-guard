@@ -478,3 +478,100 @@ test('node -e comparison operators are not redirects', () => {
   const command = 'node -e "console.log(1 > 0)"'
   assert.equal(extractShellWrites('pwsh', { command }), null)
 })
+
+function targets(tool, command) {
+  const result = extractShellWrites(tool, { command })
+  return result ? [...result.known, ...result.unknown].map(w => w.path).sort() : []
+}
+
+test('command names in prose, quotes and comments do not start commands', () => {
+  for (const tool of ['pwsh', 'bash']) {
+    const say = tool === 'pwsh' ? 'Write-Output' : 'echo'
+    for (const text of ['Set-Content -Path fake -Value x', 'curl -o fake', 'bash -c "cat input > fake"']) {
+      assert.deepEqual(targets(tool, `${say} '${text}'`), [])
+      assert.deepEqual(targets(tool, `${say} '${text}' > real`), ['real'])
+    }
+    assert.deepEqual(targets(tool, `${say} Set-Content -Path fake; ${say} text # > junk\n${say} ok > real`), ['real'])
+    assert.deepEqual(targets(tool, `${say} word#suffix > real`), ['real'])
+  }
+  assert.deepEqual(targets('pwsh', "<# Set-Content -Path fake -Value nope\n> junk #> 'ok' | Set-Content real"), ['real'])
+  assert.deepEqual(targets('bash', 'echo ok # cat <<EOF\necho ok > real'), ['real'])
+})
+
+test('only shell redirect operators create targets', () => {
+  assert.deepEqual(targets('bash', '[[ a > b && c < d ]] && echo ok > real'), ['real'])
+  assert.deepEqual(targets('bash', '[[ a > b ]] > log'), ['log'])
+  assert.deepEqual(targets('bash', 'echo \\> data; echo [[ > real'), ['real'])
+  assert.deepEqual(targets('pwsh', 'Write-Output `> data; Write-Output ok > real'), ['real'])
+})
+
+test('inline script masking stops at its argument even with later matching quotes', () => {
+  for (const tool of ['bash', 'pwsh']) {
+    assert.deepEqual(targets(tool, 'python -c "print(1 > 0)" > "report file"; echo done > "second file"'), ['report file', 'second file'])
+    assert.deepEqual(targets(tool, `node -e 'console.log(1 > 0)' | tee 'real file'`), ['real file'])
+  }
+  assert.deepEqual(targets('pwsh', `python -c "print(1 > 0)"; Set-Content -Path "real" -Value "ok"`), ['real'])
+})
+
+test('WhatIf is a local effective switch, not text or a global filter', () => {
+  for (const flag of ['-WhatIf', '-wHaTiF:$true']) {
+    assert.deepEqual(targets('pwsh', `Set-Content ${flag} -Path pretend -Value ok > log; Set-Content real ok`), ['log', 'real'])
+    assert.deepEqual(targets('pwsh', `New-Item -Path pretend -ItemType File ${flag} | Out-File real`), ['real'])
+    assert.deepEqual(targets('pwsh', `Expand-Archive pretend.zip -DestinationPath pretend ${flag}`), [])
+  }
+  for (const flag of ['-WhatIf:$false', '-WhatIf:$switch']) {
+    assert.deepEqual(targets('pwsh', `Set-Content ${flag} -Path real -Value ok`), ['real'])
+  }
+  assert.equal(known(`Set-Content -Path real -- -WhatIf`, 'pwsh')[0].path, 'real')
+  assert.deepEqual(known(`Set-Content -Path real -Value '-WhatIf'`, 'pwsh')[0].content, '-WhatIf')
+  assert.deepEqual(targets('pwsh', `Set-Content -Value 'some -Path fake -WhatIf' -Path real`), ['real'])
+  assert.deepEqual(targets('pwsh', `Set-Content -Encoding UTF8 -NoNewline real 'value -Path fake'`), ['real'])
+  assert.deepEqual(targets('pwsh', `& 'Set-Content' -Value:ok -Path:'real file'`), ['real file'])
+})
+
+test('Env provider targets are not files; similarly named file paths still are', () => {
+  for (const cmd of ['Set-Item', 'Set-Content', 'Add-Content']) {
+    assert.deepEqual(targets('pwsh', `${cmd} -LiteralPath 'EnV:DEMO' -Value ok`), [])
+    assert.deepEqual(targets('pwsh', `${cmd} './Env-demo' ok`), ['./Env-demo'])
+    assert.deepEqual(targets('pwsh', `${cmd} -Path $env:OUTPUT_FILE -Value ok`), ['$env:OUTPUT_FILE'])
+  }
+  assert.deepEqual(targets('pwsh', 'New-Item -ItemType File -Path Env:DEMO; Out-File env.log'), ['env.log'])
+  assert.deepEqual(targets('bash', 'echo ok > Env:demo'), ['Env:demo'])
+})
+
+test('a redirected here-string pipeline still inspects the nested shell', () => {
+  const command = ["Write-Output @'", 'echo ok > nested.txt', "'@ | bash"].join('\n')
+  assert.deepEqual(targets('pwsh', command), ['nested.txt'])
+  assert.deepEqual(targets('pwsh', 'if ($ready) { Set-Content -Path notes.txt -Value ready }'), ['notes.txt'])
+})
+
+test('each statement and nested script gets its own write context', () => {
+  const cwd = process.cwd()
+  const result = extractShellWrites('bash', { command: `test -d . || echo maybe > same; echo yes > same; cd first && bash -c 'cd second && echo inner > leaf' && echo outer > leaf` }, cwd)
+  const same = result.known.filter(w => w.path === 'same')
+  assert.ok(same.some(w => !w.skipVerify && (w.baseDir ?? cwd) === cwd))
+  const merged = extractShellWrites('bash', { command: 'cd first && echo one > a; echo two > b' }, cwd)
+  assert.equal(merged.known.find(w => w.path === 'b').dynamic, true)
+  const leaves = result.known.filter(w => w.path === 'leaf')
+  assert.equal(leaves.length, 2)
+  assert.ok(leaves.some(w => /[\\/]first[\\/]second$/.test(w.baseDir)))
+  assert.ok(leaves.some(w => /[\\/]first$/.test(w.baseDir)))
+})
+
+test('New-Item defaults to a file when -ItemType is omitted', () => {
+  const extracted = extractShellWrites('pwsh', { command: 'New-Item -Path n.txt -Value $var' }, 'C:/w')
+  assert.deepEqual(extracted.unknown.map((w) => w.path), ['n.txt'])
+})
+
+test('New-Item with a literal value is a known write', () => {
+  const extracted = extractShellWrites('pwsh', { command: "New-Item -Path n.txt -Value 'hello'" }, 'C:/w')
+  assert.deepEqual(extracted.known.map((w) => w.path), ['n.txt'])
+})
+
+test('New-Item -ItemType Directory is not a file write', () => {
+  assert.equal(extractShellWrites('pwsh', { command: 'New-Item -ItemType Directory -Path d1' }, 'C:/w'), null)
+})
+
+test('New-Item skips a directory type given after the path', () => {
+  assert.equal(extractShellWrites('pwsh', { command: 'New-Item -Path d2 -ItemType Directory' }, 'C:/w'), null)
+})
