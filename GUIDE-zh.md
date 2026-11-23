@@ -88,6 +88,42 @@ write-guard（内容 + shell + 写后校验）
 
 设 `false` 表示这一类**不再上报、直接放行**（不是降级为记录）。所以只在"这类噪音大于它带来的风险"时才关。
 
+内容扫描同样按类别开关（`contentChecks`），14 类：
+
+```yaml
+    contentChecks:
+      download-execute: true      # 下载即执行
+      encoded-payload: true       # 编码载荷、高熵串
+      obfuscation: true           # 混淆
+      persistence: true           # 持久化
+      credential-theft: true      # 凭证窃取
+      reverse-shell: true         # 反弹 Shell
+      defense-evasion: true       # 防御规避
+      privilege-escalation: true  # 提权
+      office-macro: true          # Office 宏
+      archive: true               # 解压后执行
+      propagation: true           # 传播
+      magic: true                 # PE/ELF/ZIP 文件头
+      binary: true                # 二进制控制字节
+      double-extension: true      # invoice.pdf.exe
+```
+
+除此之外还有一组整功能开关，常用的几个：
+
+| 开关 | 关掉之后 |
+|---|---|
+| `shellGuard: false` | 完全不解析 shell 写入 |
+| `verifyWrites: false` | 不做写后校验（分片载荷就看不出来了） |
+| `entropy: false` | 不检测高熵编码串 |
+| `homoglyph: false` | 不做全角/零宽/西里尔字符折叠 |
+| `blockBinaries: false` | 写可执行后缀从"拒绝"降为"确认" |
+| `docPolicy: enforce` | 文档里的命令示例也当真实载荷拦 |
+| `quarantine: false` | 被拒的载荷不留证 |
+| `audit: false` | 不写审计日志（拒绝原因仍会返回） |
+| `integrity: false` | 不校验插件自身文件是否被改 |
+
+项目规则文件（`write-guard.rules.json`）里的 `custom` 规则不受 `contentChecks` 影响——你自己写的规则永远生效。
+
 ---
 
 ## 默认策略

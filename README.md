@@ -107,7 +107,45 @@ dsh plugin --profile web add file:./dsh-write-guard
         entropy: true
         integrity: true
         notify: false              # 通知命令见下
+        contentChecks:             # 内容扫描按类别开关，false = 该类不扫描
+          download-execute: true   # 下载即执行
+          encoded-payload: true    # 编码载荷、高熵串
+          obfuscation: true        # 混淆
+          persistence: true        # 持久化
+          credential-theft: true   # 凭证窃取
+          reverse-shell: true      # 反弹 Shell
+          defense-evasion: true    # 防御规避
+          privilege-escalation: true # 提权
+          office-macro: true       # Office 宏
+          archive: true            # 解压后执行
+          propagation: true        # 传播
+          magic: true              # PE/ELF/ZIP 文件头
+          binary: true             # 二进制控制字节
+          double-extension: true   # 双扩展名
 ```
+
+**全部开关一览**
+
+| 开关 | 默认 | 关掉之后 |
+|---|---|---|
+| `mode` | `enforce` | `dry-run` 只记录不拦；`off` 完全关闭 |
+| `blockThreshold` / `askThreshold` | 70 / 40 | 调整判定分界 |
+| `shellGuard` | true | 完全不解析 shell 写入 |
+| `shellChecks.*`（8 类） | true | 该类 shell 写入不再上报 |
+| `shellUnknownPolicy` | `ask` | `allow`：内容不可检查的写入直接放行 |
+| `verifyWrites` | true | 不做写后校验 |
+| `verifyPolicy` | `block` | `audit`：哈希不符只记录 |
+| `contentChecks.*`（14 类） | true | 该类内容检测不再扫描 |
+| `entropy` | true | 不做高熵串检测 |
+| `homoglyph` | true | 不做全角/零宽/西里尔折叠 |
+| `blockBinaries` | true | 写可执行扩展名降为 `ask` |
+| `scriptPolicy` | `ask` | `allow` / `deny` 裸脚本 |
+| `docPolicy` | `downgrade` | `enforce`：文档里的命令示例同样拦截 |
+| `quarantine` | true | 被拒载荷不留存 |
+| `audit` / `auditHashChain` | true | 不写审计 / 不加哈希链 |
+| `integrity` | true | 不做插件自身指纹校验 |
+| `notify` | false | 告警通道 |
+| `onScannerError` | `ask` | `allow`：扫描出错时放行 |
 
 **先干跑**：`mode: dry-run` 只记录"本来会拦什么"，不实际拦截。跑一两天看审计日志，确认没有误报再切 `enforce`。
 

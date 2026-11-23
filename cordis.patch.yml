@@ -70,6 +70,23 @@
         entropyThreshold: 4.5
         entropyMinLength: 200
         homoglyph: true              # fold Cyrillic/Greek confusables
+        # Per-category switches for content scanning. `false` drops the whole
+        # category before scoring. Project `custom` rules are exempt.
+        contentChecks:
+          download-execute: true     # fetch-and-run, IEX DownloadString
+          encoded-payload: true      # base64/hex blobs, high entropy
+          obfuscation: true          # string splicing, long unbroken lines
+          persistence: true          # Run keys, scheduled tasks, services
+          credential-theft: true     # browser stores, tokens, keylogging
+          reverse-shell: true        # netcat/socat/socket shells
+          defense-evasion: true      # AMSI/Defender tampering, logging off
+          privilege-escalation: true # UAC bypass, runas tricks
+          office-macro: true         # VBA auto-exec, DDE
+          archive: true              # extract-then-run
+          propagation: true          # copy to shares/USB, self-spread
+          magic: true                # PE/ELF/Mach-O/ZIP file headers
+          binary: true               # NUL and control bytes
+          double-extension: true     # invoice.pdf.exe
 
         # --- evidence ------------------------------------------------------
         quarantine: true
