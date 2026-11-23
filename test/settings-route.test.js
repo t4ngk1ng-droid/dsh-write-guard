@@ -109,3 +109,28 @@ test('a non-GET/POST method is rejected', async (t) => {
   const { code } = await call(m.routes.get('/dsh-write-guard/config'), 'DELETE')
   assert.equal(code, 405)
 })
+
+test('a context without a web server does not fail to mount', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'wg-noweb-'))
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  t.after(() => {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  })
+  // Cordis throws when an undeclared service property is read, which is exactly
+  // what the desktop profile does.
+  const ctx = {
+    on() {},
+    logger: { warn() {}, info() {} },
+    tools: { register() {} },
+    get: () => undefined,
+    get webServer() {
+      throw new Error('cannot get property "webServer" without inject')
+    },
+  }
+  assert.doesNotThrow(() =>
+    apply(ctx, { audit: false, integrity: false, quarantine: false, notify: false }),
+  )
+})

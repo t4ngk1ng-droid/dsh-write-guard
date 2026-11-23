@@ -39,8 +39,14 @@ import { quarantineWrite } from './lib/quarantine.js'
 import { verifyIntegrity } from './lib/integrity.js'
 
 export const name = 'write-guard'
-/** Consumer — the gates and the tools need the tools service. */
-export const inject = ['tools']
+/**
+ * `tools` carries the gates and the tools, so it stays required — a profile
+ * without it should fail loudly rather than leave writes unguarded.
+ * `webServer` + `connection` only carry the settings-panel route and must be
+ * optional: a profile that serves the UI over file:// has no web server, and
+ * requiring it there would keep the whole guard from activating.
+ */
+export const inject = ['tools', 'webServer', 'connection']
 
 const WRITE_TOOL_NAMES = new Set(['write', 'edit', 'str_replace_editor', 'apply_patch'])
 const SHELL_TOOL_NAMES = new Set(['bash', 'pwsh', 'powershell', 'cmd'])
@@ -1001,7 +1007,15 @@ export function apply(ctx, rawConfig = {}) {
   // one (Electron over file:// + IPC) simply has no panel and the switches stay
   // reachable through the `write_guard_config` tool.
   // ---------------------------------------------------------------------
-  const webServer = (typeof ctx.get === 'function' ? ctx.get('webServer') : undefined) || ctx.webServer
+  // Cordis throws on a service property that was not declared in `inject`, and
+  // the desktop profile has no web server at all, so both paths stay guarded.
+  let webServer
+  try {
+    webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined
+    if (!webServer) webServer = ctx.webServer
+  } catch {
+    webServer = undefined
+  }
   if (webServer && typeof webServer.register === 'function') {
     const readBody = (req) =>
       new Promise((resolve) => {
@@ -1023,7 +1037,12 @@ export function apply(ctx, rawConfig = {}) {
     // page could rewrite the guard's switches.
     const rejected = (req, res) => {
       try {
-        const conn = (typeof ctx.get === 'function' ? ctx.get('connection') : undefined) || ctx.connection
+        let conn = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+        try {
+          if (!conn) conn = ctx.connection
+        } catch {
+          conn = undefined
+        }
         if (!conn || typeof conn.requestRejection !== 'function') return false
         const code = conn.requestRejection(req)
         if (code === undefined || code === null || code === false) return false
