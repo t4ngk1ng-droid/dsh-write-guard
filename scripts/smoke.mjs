@@ -46,10 +46,10 @@ apply(ctx, {
 
 assert.ok(listeners.has('tools/pre-execute'), 'pre-execute listener mounted')
 assert.ok(listeners.has('dispose'), 'dispose handler mounted')
-assert.equal(registered.length, 4, 'four tools registered')
+assert.equal(registered.length, 5, 'five tools registered')
 assert.deepEqual(
   registered.map((d) => d.name).sort(),
-  ['write_guard_reload', 'write_guard_scan', 'write_guard_status', 'write_guard_verify_chain'],
+  ['write_guard_config', 'write_guard_reload', 'write_guard_scan', 'write_guard_status', 'write_guard_verify_chain'],
 )
 const scanTool = registered.find((d) => d.name === 'write_guard_scan')
 assert.equal(scanTool.parameters.type, 'object')

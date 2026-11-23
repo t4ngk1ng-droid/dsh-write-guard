@@ -72,6 +72,18 @@ write-guard（内容 + shell + 写后校验）
 
 第一次装建议先设 `dry-run` 跑一两天——所有写入照常执行，只在审计里记录"本来会拦什么"，确认没有误报再切 `enforce`。
 
+### 在 DSH 里直接改，不用碰配置文件
+
+对 Agent 说一句就行：
+
+> 「把解压检测关掉」
+> 「列出 write-guard 现在哪些开关是关的」
+> 「切成 dry-run 跑两天」
+
+它会调用 `write_guard_config` 工具，改完**立即生效**，不用重启。改动存在 `<DSH_HOME>/write-guard/config.json`，和配置文件里的设置叠加。说「恢复默认」就还原。
+
+注意：`audit`、`quarantine`、`notify`、`integrity` 这四个要重启才生效，其他都是即时的。
+
 按类别开关（`shellChecks`）可以关掉某一类检测：
 
 ```yaml

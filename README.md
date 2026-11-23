@@ -197,8 +197,31 @@ dsh plugin --profile web add file:./dsh-write-guard
 
 - **`write_guard_scan(text, path?)`** — 用同一套引擎手动扫一段内容，不写任何东西
 - **`write_guard_status()`** — 配置、计数、规则来源、自校验状态、最近 50 条决策
+- **`write_guard_config(set?, clear?)`** — **在对话里直接改开关**，不用编辑配置文件
 - **`write_guard_reload()`** — 重新加载项目规则文件
 - **`write_guard_verify_chain(file?)`** — 校验审计哈希链，报告第一条断链
+
+### 在 DSH 里改开关
+
+不用编辑 YAML。直接对 Agent 说：
+
+> 「把解压检测关掉」
+> 「列出 write-guard 现在哪些开关是关的」
+> 「下载检测改成只记录不拦」
+
+Agent 会调用 `write_guard_config`，把改动写进 `<DSH_HOME>/write-guard/config.json` 并**立即生效**，不需要重启。
+
+也可以自己指定参数：
+
+```json
+{ "set": { "shellChecks": { "extract": false } } }
+{ "set": { "mode": "dry-run" } }
+{ "clear": ["shellChecks"] }        // 恢复默认
+```
+
+嵌套对象是**按键合并**的：只写 `{ "shellChecks": { "extract": false } }` 不会影响其他 7 类。
+
+需要重启才生效的：`audit`、`quarantine`、`notify`、`integrity` —— 它们对应在装载时创建的对象。
 
 ## 证据
 

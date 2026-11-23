@@ -23,11 +23,11 @@
  * @module dsh-write-guard
  */
 
-import { readFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { normalizeConfig } from './lib/config.js'
+import { DEFAULT_CONFIG, normalizeConfig } from './lib/config.js'
 import { scanToolCall, extname } from './lib/scanner.js'
 import { extractShellWrites, writeCategory } from './lib/shell.js'
 import { BINARY_EXTENSIONS, RULES, SCRIPT_EXTENSIONS } from './lib/patterns.js'
@@ -119,12 +119,121 @@ function escalates(previous, next) {
   return rank[next] > rank[previous]
 }
 
+/** Switches `write_guard_config` accepts, grouped for the no-argument listing. */
+const SWITCH_GROUPS = Object.freeze({
+  '判定': ['mode', 'blockThreshold', 'askThreshold', 'onScannerError'],
+  '扫描预算': ['maxScanBytes', 'maxContentBytes', 'maxVerifyBytes', 'truncatePolicy'],
+  '路径': ['scriptPolicy', 'docPolicy', 'blockBinaries', 'ignorePaths'],
+  '内容检测': ['entropy', 'entropyThreshold', 'entropyMinLength', 'homoglyph', 'contentChecks'],
+  'Shell 写入': ['shellGuard', 'shellUnknownPolicy', 'shellChecks'],
+  '写后校验': ['verifyWrites', 'verifyPolicy'],
+  '证据与通知': ['quarantine', 'audit', 'auditHashChain', 'integrity', 'notify', 'notifyMinScore'],
+})
+
+/** Runtime edits need a restart to rebuild these collaborators. */
+const RESTART_ONLY = new Set(['quarantine', 'quarantineDir', 'audit', 'auditFile', 'auditMaxBytes', 'auditHashChain', 'integrity', 'notify', 'notifyCommand', 'notifyMinScore'])
+
+/**
+ * Merge a `set` payload into the stored overrides. Nested objects merge key by
+ * key so flipping one category does not reset its siblings.
+ * @param {Record<string, unknown>} current
+ * @param {Record<string, unknown>} set
+ * @param {string[]} clear
+ */
+function mergeRuntime(current, set, clear) {
+  const next = { ...current }
+  for (const key of clear) delete next[key]
+  for (const [key, value] of Object.entries(set)) {
+    const nested = value && typeof value === 'object' && !Array.isArray(value)
+    if (nested && next[key] && typeof next[key] === 'object' && !Array.isArray(next[key])) {
+      next[key] = { ...next[key], ...value }
+    } else {
+      next[key] = value
+    }
+  }
+  return next
+}
+
+/** Switches whose effective value differs from the shipped default. */
+function changedFromDefault(config) {
+  const changed = {}
+  for (const [key, value] of Object.entries(config)) {
+    if (key === 'shellChecks' || key === 'contentChecks') {
+      const off = Object.entries(value).filter(([, on]) => on === false).map(([name]) => name)
+      if (off.length > 0) changed[key] = off
+    } else if (JSON.stringify(value) !== JSON.stringify(DEFAULT_CONFIG[key])) {
+      changed[key] = value
+    }
+  }
+  return changed
+}
+
+/** @param {Record<string, any>} config */
+function publicConfig(config) {
+  return {
+    mode: config.mode,
+    thresholds: { block: config.blockThreshold, ask: config.askThreshold },
+    scriptPolicy: config.scriptPolicy,
+    docPolicy: config.docPolicy,
+    blockBinaries: config.blockBinaries,
+    shellGuard: config.shellGuard,
+    shellUnknownPolicy: config.shellUnknownPolicy,
+    verifyWrites: config.verifyWrites,
+    verifyPolicy: config.verifyPolicy,
+    entropy: config.entropy,
+    homoglyph: config.homoglyph,
+    quarantine: config.quarantine,
+    audit: config.audit,
+    integrity: config.integrity,
+    notify: config.notify,
+    shellChecks: config.shellChecks,
+    contentChecks: config.contentChecks,
+    changed: changedFromDefault(config),
+  }
+}
+
+function renderConfig(value) {
+  if (!value?.ok) return `write-guard: 配置未修改：${value?.error ?? 'unknown error'}`
+  const c = value.config
+  const off = (map) => Object.entries(map).filter(([, on]) => on === false).map(([k]) => k)
+  const lines = [
+    `模式 ${c.mode}｜拦截 ≥${c.thresholds.block}｜转人工 ≥${c.thresholds.ask}`,
+    `shell 细节：${off(c.shellChecks).join(', ') || '全部开启'}`,
+    `内容检测：${off(c.contentChecks).join(', ') || '全部开启'}`,
+  ]
+  if (value.file) lines.push(`已写入 ${value.file}`)
+  if (value.available) {
+    lines.push('可改开关：' + Object.entries(value.available).map(([g, keys]) => `${g}=${keys.join('/')}`).join('；'))
+  }
+  const changed = Object.keys(c.changed)
+  lines.push(changed.length ? `偏离默认：${changed.join(', ')}` : '全部为默认值')
+  return lines.join('\n')
+}
+
+/** Grouped switch names, for the listing returned when no arguments are given. */
+function availableSwitches() {
+  const out = {}
+  for (const [group, keys] of Object.entries(SWITCH_GROUPS)) out[group] = [...keys]
+  return out
+}
+
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {Record<string, unknown>} rawConfig
  */
 export function apply(ctx, rawConfig = {}) {
-  const config = normalizeConfig(rawConfig)
+  // Runtime overrides written by `write_guard_config`. They sit on top of the
+  // loader config so a switch can be flipped without editing the profile.
+  const runtimeConfigFile = join(dshHome(), 'write-guard', 'config.json')
+  let runtimeConfig = {}
+  try {
+    const parsed = JSON.parse(readFileSync(runtimeConfigFile, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) runtimeConfig = parsed
+  } catch {
+    // Missing or malformed: the loader config stands.
+  }
+  const mergeConfig = () => normalizeConfig({ ...rawConfig, ...runtimeConfig })
+  let config = mergeConfig()
   const builtinRules = RULES
 
   const audit = config.audit
@@ -717,6 +826,55 @@ export function apply(ctx, rawConfig = {}) {
           recent: recent.list(),
           auditFile: config.audit ? config.auditFile || defaultAuditFile() : '',
           quarantineDir: config.quarantine ? quarantineDir : '',
+        }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'write_guard_config',
+      description:
+        'Read or change write-guard switches at runtime. Call with no arguments to list the current settings and every available switch. Call with `set` (and optionally `clear`) to change them: values are merged, written to <DSH_HOME>/write-guard/config.json, and applied immediately. Setting a nested object only changes the keys you pass, so flipping one category leaves the others alone. Changes to audit/quarantine/notify/integrity only take effect after a restart.',
+      parameters: {
+        type: 'object',
+        properties: {
+          set: {
+            type: 'object',
+            additionalProperties: true,
+            description:
+              'Switches to change, e.g. {"shellChecks":{"extract":false}} or {"mode":"dry-run"}. Nested objects are merged key by key.',
+          },
+          clear: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Switch names to revert to the shipped default, e.g. ["shellChecks"].',
+          },
+        },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (value) => [{ type: 'text', text: renderConfig(value) }],
+      },
+      timeoutMs: 5_000,
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const set = args?.set && typeof args.set === 'object' && !Array.isArray(args.set) ? args.set : null
+        const clear = Array.isArray(args?.clear) ? args.clear.map(String) : []
+        if (!set && clear.length === 0) {
+          return { ok: true, config: publicConfig(config), available: availableSwitches() }
+        }
+        try {
+          const next = mergeRuntime(runtimeConfig, set ?? {}, clear)
+          mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
+          const temp = `${runtimeConfigFile}.${process.pid}.tmp`
+          writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+          renameSync(temp, runtimeConfigFile)
+          runtimeConfig = next
+          config = mergeConfig()
+          return { ok: true, config: publicConfig(config), file: runtimeConfigFile, applied: 'immediately' }
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) }
         }
       },
     }),

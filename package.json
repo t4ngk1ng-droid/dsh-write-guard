@@ -1,6 +1,6 @@
 {
   "name": "dsh-write-guard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Content-aware write protection for DeepSeek Harness: scans file writes and shell redirects before they land, verifies hashes after, detects payloads split across writes, enforces project custom rules, chains the audit log, and fingerprints its own files. 内容级写入防护：落盘前扫描文件写入与 shell 重定向，落盘后校验哈希与全文，检测分片拼接，支持项目自定义规则、哈希链审计与插件自校验。",
   "type": "module",
   "main": "index.js",
