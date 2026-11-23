@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { apply, name, inject } from '../index.js'
 
 assert.equal(name, 'write-guard')
-assert.deepEqual(inject, ['tools', 'webServer', 'connection'])
+assert.deepEqual(inject, ['tools'])
 
 const listeners = new Map()
 const registered = []
