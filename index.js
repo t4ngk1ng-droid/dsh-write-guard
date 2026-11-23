@@ -137,7 +137,10 @@ const SWITCH_GROUPS = Object.freeze({
 })
 
 /** Runtime edits need a restart to rebuild these collaborators. */
-const RESTART_ONLY = new Set(['quarantine', 'quarantineDir', 'audit', 'auditFile', 'auditMaxBytes', 'auditHashChain', 'integrity', 'notify', 'notifyCommand', 'notifyMinScore'])
+// Only switches whose collaborator is built at mount. `quarantine` is read
+// live on every deny, so it belongs to the immediate group; `quarantineDir` is
+// resolved once and does not.
+const RESTART_ONLY = new Set(['quarantineDir', 'audit', 'auditFile', 'auditMaxBytes', 'auditHashChain', 'integrity', 'notify', 'notifyCommand', 'notifyMinScore'])
 
 /**
  * Merge a `set` payload into the stored overrides. Nested objects merge key by
@@ -151,6 +154,8 @@ function mergeRuntime(current, set, clear) {
   for (const key of clear) delete next[key]
   for (const [key, value] of Object.entries(set)) {
     const nested = value && typeof value === 'object' && !Array.isArray(value)
+    // Object.create(null) semantics: assigning through a plain object would
+    // let `__proto__` reach the legacy setter and swap the prototype.
     if (nested && next[key] && typeof next[key] === 'object' && !Array.isArray(next[key])) {
       next[key] = { ...next[key], ...value }
     } else {
@@ -158,6 +163,40 @@ function mergeRuntime(current, set, clear) {
     }
   }
   return next
+}
+
+/** Switch names that may appear in a runtime override. */
+const RUNTIME_KEYS = new Set(Object.keys(DEFAULT_CONFIG))
+const CHECK_GROUP_KEYS = {
+  shellChecks: new Set(Object.keys(DEFAULT_CONFIG.shellChecks)),
+  contentChecks: new Set(Object.keys(DEFAULT_CONFIG.contentChecks)),
+}
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * Reject anything the panel or the tool is not allowed to write before it can
+ * reach the merge. Without this, a direct POST could add arbitrary keys to the
+ * override file and, through `__proto__`, swap a merged object's prototype.
+ * @param {Record<string, unknown>} set
+ * @param {string[]} clear
+ */
+function assertRuntimePatch(set, clear) {
+  const bad = (message) => {
+    throw Object.assign(new Error(message), { statusCode: 400 })
+  }
+  for (const key of clear) {
+    if (FORBIDDEN_KEYS.has(key) || !RUNTIME_KEYS.has(key)) bad(`unknown clear key: ${key}`)
+  }
+  for (const [key, value] of Object.entries(set)) {
+    if (FORBIDDEN_KEYS.has(key) || !RUNTIME_KEYS.has(key)) bad(`unknown set key: ${key}`)
+    const allowed = CHECK_GROUP_KEYS[key]
+    if (!allowed) continue
+    if (!value || typeof value !== 'object' || Array.isArray(value)) bad(`${key} must be an object`)
+    for (const [name, enabled] of Object.entries(value)) {
+      if (FORBIDDEN_KEYS.has(name) || !allowed.has(name)) bad(`unknown ${key} key: ${name}`)
+      if (typeof enabled !== 'boolean') bad(`${key}.${name} must be a boolean`)
+    }
+  }
 }
 
 /** Switches whose effective value differs from the shipped default. */
@@ -250,6 +289,7 @@ export function apply(ctx, rawConfig = {}) {
    * @param {string[]} clear
    */
   const saveRuntimeConfig = (set, clear) => {
+    assertRuntimePatch(set, clear)
     const next = mergeRuntime(runtimeConfig, set, clear)
     mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
     const temp = `${runtimeConfigFile}.${process.pid}.tmp`
@@ -1017,15 +1057,41 @@ export function apply(ctx, rawConfig = {}) {
     webServer = undefined
   }
   if (webServer && typeof webServer.register === 'function') {
+    // Every failure mode must reject: resolving to '' would be parsed as an
+    // empty patch and answered with 200, and `req.destroy()` alone can leave
+    // the promise pending forever.
     const readBody = (req) =>
-      new Promise((resolve) => {
-        let raw = ''
+      new Promise((resolve, reject) => {
+        const chunks = []
+        let size = 0
+        let settled = false
+        const fail = (statusCode, message) => {
+          if (settled) return
+          settled = true
+          reject(Object.assign(new Error(message), { statusCode }))
+        }
         req.on('data', (chunk) => {
-          raw += chunk
-          if (raw.length > 64 * 1024) req.destroy()
+          if (settled) return
+          size += chunk.length
+          if (size > 64 * 1024) {
+            fail(413, 'payload too large')
+            return
+          }
+          chunks.push(chunk)
         })
-        req.on('end', () => resolve(raw))
-        req.on('error', () => resolve(''))
+        req.on('end', () => {
+          if (settled) return
+          settled = true
+          resolve(Buffer.concat(chunks).toString('utf8'))
+        })
+        req.on('error', (error) => {
+          if (settled) return
+          settled = true
+          reject(error)
+        })
+        req.on('close', () => {
+          if (!req.readableEnded) fail(400, 'request aborted')
+        })
       })
     const sendJson = (res, code, payload) => {
       res.statusCode = code
@@ -1034,23 +1100,32 @@ export function apply(ctx, rawConfig = {}) {
       res.end(JSON.stringify(payload))
     }
     // Every custom route must pass the browser-trust fence, otherwise any open
-    // page could rewrite the guard's switches.
+    // page could rewrite the guard's switches. A missing or throwing fence is
+    // a rejection, not a pass: this route writes security policy.
     const rejected = (req, res) => {
+      let conn
       try {
-        let conn = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
-        try {
-          if (!conn) conn = ctx.connection
-        } catch {
-          conn = undefined
-        }
-        if (!conn || typeof conn.requestRejection !== 'function') return false
+        conn = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+        if (!conn) conn = ctx.connection
+      } catch {
+        conn = undefined
+      }
+      if (!conn || typeof conn.requestRejection !== 'function') {
+        sendJson(res, 503, { ok: false, error: 'trust fence unavailable' })
+        return true
+      }
+      try {
         const code = conn.requestRejection(req)
         if (code === undefined || code === null || code === false) return false
         res.statusCode = typeof code === 'number' ? code : 403
         res.end()
         return true
-      } catch {
-        return false
+      } catch (error) {
+        ctx.logger?.warn?.(
+          `write-guard: trust fence failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        sendJson(res, 503, { ok: false, error: 'trust fence unavailable' })
+        return true
       }
     }
     try {
@@ -1066,7 +1141,9 @@ export function apply(ctx, rawConfig = {}) {
               config: publicConfig(config),
               available: availableSwitches(),
               defaults: publicConfig(normalizeConfig({})),
-              file: runtimeConfigFile,
+              // The logical path only: the panel has no use for the host's
+              // directory layout, and the browser should not learn it.
+              file: join('<DSH_HOME>', 'write-guard', 'config.json'),
               restartOnly: [...RESTART_ONLY],
             })
             return
@@ -1079,8 +1156,9 @@ export function apply(ctx, rawConfig = {}) {
           try {
             const text = await readBody(req)
             payload = text ? JSON.parse(text) : {}
-          } catch {
-            sendJson(res, 400, { ok: false, error: 'invalid json' })
+          } catch (error) {
+            const code = error?.statusCode ?? 400
+            sendJson(res, code, { ok: false, error: code === 413 ? 'payload too large' : 'invalid json' })
             return
           }
           try {
@@ -1089,7 +1167,13 @@ export function apply(ctx, rawConfig = {}) {
             const result = saveRuntimeConfig(set, clear)
             sendJson(res, 200, { ok: true, config: result.config, file: result.file, defaults: publicConfig(normalizeConfig({})) })
           } catch (error) {
-            sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+            // A rejected patch carries its own 400; anything else is a real fault.
+            const code = error?.statusCode ?? 500
+            if (code >= 500) ctx.logger?.warn?.(`write-guard: config save failed: ${error instanceof Error ? error.message : String(error)}`)
+            sendJson(res, code, {
+              ok: false,
+              error: code >= 500 ? 'failed to save config' : error instanceof Error ? error.message : String(error),
+            })
           }
         },
       })
