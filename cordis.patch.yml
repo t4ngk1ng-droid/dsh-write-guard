@@ -58,6 +58,7 @@
           extract: true       # tar / unzip / 7z / Expand-Archive
           dotnet: true        # [IO.File]::WriteAllText and friends
           cmdlets: true       # Set-Content, Out-File, New-Item, Start-Process
+          copy: true          # cp, mv, Copy-Item, Move-Item, dd of=
 
         # --- post-write verification --------------------------------------
         verifyWrites: true

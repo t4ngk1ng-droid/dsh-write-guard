@@ -575,3 +575,33 @@ test('New-Item -ItemType Directory is not a file write', () => {
 test('New-Item skips a directory type given after the path', () => {
   assert.equal(extractShellWrites('pwsh', { command: 'New-Item -Path d2 -ItemType Directory' }, 'C:/w'), null)
 })
+
+test('PowerShell aliases resolve to the cmdlet they stand for', () => {
+  assert.deepEqual(extractShellWrites('pwsh', { command: 'sc -Path a.txt -Value hi' }, 'C:/w').known.map((w) => w.path), ['a.txt'])
+  // The piped value is not a literal, so the content is unknown, not known.
+  assert.deepEqual(extractShellWrites('pwsh', { command: 'gc x | sc out.txt' }, 'C:/w').unknown.map((w) => w.path), ['out.txt'])
+})
+
+test('copy and move report their destination', () => {
+  assert.deepEqual(extractShellWrites('bash', { command: 'cp a.txt b.txt' }, 'C:/w').unknown.map((w) => w.path), ['b.txt'])
+  assert.deepEqual(extractShellWrites('pwsh', { command: 'Copy-Item a.txt b.ps1' }, 'C:/w').unknown.map((w) => w.path), ['b.ps1'])
+  assert.deepEqual(extractShellWrites('pwsh', { command: 'Move-Item a.txt b.txt' }, 'C:/w').unknown.map((w) => w.path), ['b.txt'])
+})
+
+test('dd reports its of= target', () => {
+  assert.deepEqual(extractShellWrites('bash', { command: 'dd if=/dev/zero of=d.bin bs=1M' }, 'C:/w').unknown.map((w) => w.path), ['d.bin'])
+})
+
+test('export-csv reports its path', () => {
+  assert.deepEqual(extractShellWrites('pwsh', { command: 'Get-Process | Export-Csv e.csv' }, 'C:/w').unknown.map((w) => w.path), ['e.csv'])
+})
+
+test('a literal invoke-expression is parsed as a command', () => {
+  const extracted = extractShellWrites('pwsh', { command: 'iex "Set-Content z.txt hi"' }, 'C:/w')
+  assert.deepEqual(extracted.known.map((w) => w.path), ['z.txt'])
+})
+
+test('a dynamic invoke-expression is surfaced, not ignored', () => {
+  const extracted = extractShellWrites('pwsh', { command: 'iex $payload' }, 'C:/w')
+  assert.equal(extracted.unknown[0].source, 'stdin-script')
+})

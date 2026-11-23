@@ -102,6 +102,7 @@ dsh plugin --profile web add file:./dsh-write-guard
           extract: true            # tar / unzip / 7z / Expand-Archive
           dotnet: true             # [IO.File]::WriteAllText 等
           cmdlets: true            # Set-Content、Out-File、New-Item、Start-Process
+          copy: true               # cp、mv、Copy-Item、Move-Item、dd of=
         verifyWrites: true         # 写后哈希校验 + 全文二次扫描
         verifyPolicy: block        # 哈希不符、读取失败或二次扫描升级：block | audit
         entropy: true

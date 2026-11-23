@@ -259,3 +259,24 @@ test('maxVerifyBytes is reported as needing a restart', async (t) => {
   const { body } = await call(m.routes.get('/dsh-write-guard/config'), 'GET')
   assert.ok(body.restartOnly.includes('maxVerifyBytes'))
 })
+
+test('a malformed patch body is rejected, not treated as empty', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  for (const body of ['{"set":[1,2]}', '{"clear":"mode"}', '[1,2,3]', 'null', '"text"']) {
+    const { code } = await call(route, 'POST', body)
+    assert.equal(code, 400, body)
+  }
+  assert.equal(existsSync(m.configFile), false)
+})
+
+test('an empty patch answers 200 without touching the file', async (t) => {
+  const m = mount({ conn: allowAll })
+  t.after(m.restore)
+  const route = m.routes.get('/dsh-write-guard/config')
+  const { code, body } = await call(route, 'POST', '{}')
+  assert.equal(code, 200)
+  assert.equal(body.noop, true)
+  assert.equal(existsSync(m.configFile), false)
+})

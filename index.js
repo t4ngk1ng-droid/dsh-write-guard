@@ -23,7 +23,7 @@
  * @module dsh-write-guard
  */
 
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -69,6 +69,8 @@ const UNKNOWN_CONTENT_SOURCES = new Set([
   'dotnet-write',
   'new-item',
   'stdin-script',
+  // `dd` writes raw bytes to an arbitrary path; there is nothing to inspect.
+  'dd',
 ])
 
 /**
@@ -407,10 +409,24 @@ export function apply(ctx, rawConfig = {}) {
       runtimeConfig = previous
       throw Object.assign(new Error(rejected), { statusCode: 400 })
     }
-    mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
+    // The in-memory override is rolled back if the write fails, otherwise the
+    // live config and the file would disagree until the next restart.
     const temp = `${runtimeConfigFile}.${process.pid}.tmp`
-    writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
-    renameSync(temp, runtimeConfigFile)
+    try {
+      mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
+      writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+      renameSync(temp, runtimeConfigFile)
+    } catch (error) {
+      runtimeConfig = previous
+      try {
+        rmSync(temp, { force: true })
+      } catch {
+        // A leftover temp file is harmless; the rename never happened.
+      }
+      throw Object.assign(new Error(`failed to persist config: ${error instanceof Error ? error.message : String(error)}`), {
+        statusCode: 500,
+      })
+    }
     config = candidate
     return { ok: true, config: publicConfig(config), file: runtimeConfigFile, applied: 'immediately' }
   }
@@ -1277,8 +1293,30 @@ export function apply(ctx, rawConfig = {}) {
             return
           }
           try {
-            const set = payload?.set && typeof payload.set === 'object' && !Array.isArray(payload.set) ? payload.set : {}
-            const clear = Array.isArray(payload?.clear) ? payload.clear.map(String) : []
+            // A malformed body is an error, not an empty patch: answering 200
+            // for `{"set":[...]}` tells the caller the change was applied.
+            const bad = (message) => {
+              throw Object.assign(new Error(message), { statusCode: 400 })
+            }
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) bad('body must be an object')
+            if ('set' in payload && (!payload.set || typeof payload.set !== 'object' || Array.isArray(payload.set))) {
+              bad('set must be an object')
+            }
+            if ('clear' in payload && !Array.isArray(payload.clear)) bad('clear must be an array')
+            const set = payload.set ?? {}
+            const clear = Array.isArray(payload.clear) ? payload.clear.map(String) : []
+            if (Object.keys(set).length === 0 && clear.length === 0) {
+              // Nothing to change: report the live config without rewriting the
+              // file, so an accidental empty POST leaves no trace.
+              sendJson(res, 200, {
+                ok: true,
+                config: publicConfig(config),
+                file: join('<DSH_HOME>', 'write-guard', 'config.json'),
+                defaults: publicConfig(normalizeConfig({})),
+                noop: true,
+              })
+              return
+            }
             const result = saveRuntimeConfig(set, clear)
             sendJson(res, 200, {
               ok: true,
