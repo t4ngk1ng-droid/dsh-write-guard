@@ -38,6 +38,11 @@
     "node": ">=20.0.0"
   },
   "keywords": [
+    "ai-agent",
+    "dsh-plugins",
+    "cordis",
+    "deepseek",
+    "dsh-plugin",
     "dsh",
     "deepseek-harness",
     "security",
