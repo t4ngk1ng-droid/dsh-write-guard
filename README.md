@@ -91,6 +91,15 @@ dsh plugin --profile web add file:./dsh-write-guard
         docPolicy: downgrade       # 文档里的命令示例：降为 ask
         shellGuard: true           # 解析 shell 写文件
         shellUnknownPolicy: ask    # 无法检查内容时：ask | allow
+        shellChecks:               # 按类别开关，false = 该类不再上报（直接放行）
+          redirect: true           # > / >> / &>
+          echo: true               # echo / printf 内容写入
+          heredoc: true            # heredoc 与 stdin 脚本正文
+          tee: true                # tee / Tee-Object
+          download: true           # curl -o、iwr/irm -OutFile、certutil、bitsadmin
+          extract: true            # tar / unzip / 7z / Expand-Archive
+          dotnet: true             # [IO.File]::WriteAllText 等
+          cmdlets: true            # Set-Content、Out-File、New-Item、Start-Process
         verifyWrites: true         # 写后哈希校验 + 全文二次扫描
         verifyPolicy: block        # 哈希不符、读取失败或二次扫描升级：block | audit
         entropy: true

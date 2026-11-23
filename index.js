@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 
 import { normalizeConfig } from './lib/config.js'
 import { scanToolCall, extname } from './lib/scanner.js'
-import { extractShellWrites } from './lib/shell.js'
+import { extractShellWrites, writeCategory } from './lib/shell.js'
 import { BINARY_EXTENSIONS, RULES, SCRIPT_EXTENSIONS } from './lib/patterns.js'
 import { findRulesFile, loadRulesFile, mergeRules, RULES_FILE_NAME } from './lib/rules-file.js'
 import { createAudit, defaultAuditFile, defaultQuarantineDir, dshHome, verifyChain } from './lib/audit.js'
@@ -344,8 +344,12 @@ export function apply(ctx, rawConfig = {}) {
           // Use one session-relative name for policy, audit and readback.
           const inSession = (w) => w.baseDir && !isAbsolute(w.path)
             ? { ...w, path: relative(cwd, resolve(w.baseDir, w.path)) || '.' } : w
+          // A category switched off is not reported at all: the write passes
+          // unscanned, which is why the switches default to on.
+          const enabled = (w) => config.shellChecks[writeCategory(w.source)] !== false
 
           for (const candidate of extracted.known) {
+            if (!enabled(candidate)) continue
             const write = inSession(candidate)
             const scan = scanToolCall(
               { name: 'write', args: { file_path: write.path, content: write.content }, cwd },
@@ -371,6 +375,7 @@ export function apply(ctx, rawConfig = {}) {
           }
 
           for (const candidate of extracted.unknown) {
+            if (!enabled(candidate)) continue
             const write = inSession(candidate)
             const ext = extname(write.path)
             const riskyPath = BINARY_EXTENSIONS.has(ext) || SCRIPT_EXTENSIONS.has(ext)

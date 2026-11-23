@@ -46,6 +46,18 @@
         # ask | allow — policy when the bytes cannot be inspected (download,
         # extract, tee, pipeline) or the target is dynamic/script/executable.
         shellUnknownPolicy: ask
+        # Per-category switches for shell write detection. `false` stops that
+        # category from being reported at all — the write passes unscanned, so
+        # turn one off only when its noise outweighs the risk it covers.
+        shellChecks:
+          redirect: true      # > / >> / &> into a file
+          echo: true          # echo / printf content into a file
+          heredoc: true       # heredoc and stdin-script bodies
+          tee: true           # tee / Tee-Object
+          download: true      # curl -o, iwr/irm -OutFile, certutil, bitsadmin
+          extract: true       # tar / unzip / 7z / Expand-Archive
+          dotnet: true        # [IO.File]::WriteAllText and friends
+          cmdlets: true       # Set-Content, Out-File, New-Item, Start-Process
 
         # --- post-write verification --------------------------------------
         verifyWrites: true
