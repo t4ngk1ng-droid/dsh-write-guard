@@ -236,6 +236,24 @@ export function apply(ctx, rawConfig = {}) {
   let config = mergeConfig()
   const builtinRules = RULES
 
+  /**
+   * Persist overrides and rebuild the live config. Shared by the
+   * `write_guard_config` tool and the settings panel route so both write the
+   * same file through the same merge.
+   * @param {Record<string, unknown>} set
+   * @param {string[]} clear
+   */
+  const saveRuntimeConfig = (set, clear) => {
+    const next = mergeRuntime(runtimeConfig, set, clear)
+    mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
+    const temp = `${runtimeConfigFile}.${process.pid}.tmp`
+    writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+    renameSync(temp, runtimeConfigFile)
+    runtimeConfig = next
+    config = mergeConfig()
+    return { ok: true, config: publicConfig(config), file: runtimeConfigFile, applied: 'immediately' }
+  }
+
   const audit = config.audit
     ? createAudit({
         file: config.auditFile || defaultAuditFile(),
@@ -865,14 +883,7 @@ export function apply(ctx, rawConfig = {}) {
           return { ok: true, config: publicConfig(config), available: availableSwitches() }
         }
         try {
-          const next = mergeRuntime(runtimeConfig, set ?? {}, clear)
-          mkdirSync(dirname(runtimeConfigFile), { recursive: true, mode: 0o700 })
-          const temp = `${runtimeConfigFile}.${process.pid}.tmp`
-          writeFileSync(temp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
-          renameSync(temp, runtimeConfigFile)
-          runtimeConfig = next
-          config = mergeConfig()
-          return { ok: true, config: publicConfig(config), file: runtimeConfigFile, applied: 'immediately' }
+          return saveRuntimeConfig(set ?? {}, clear)
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) }
         }
@@ -981,6 +992,92 @@ export function apply(ctx, rawConfig = {}) {
       },
     }),
   )
+
+  // ---------------------------------------------------------------------
+  // Settings panel route
+  //
+  // The client half registers a `settings.section` that reads and writes this
+  // endpoint. Rides the same `webServer` the web app exposes; a profile without
+  // one (Electron over file:// + IPC) simply has no panel and the switches stay
+  // reachable through the `write_guard_config` tool.
+  // ---------------------------------------------------------------------
+  const webServer = (typeof ctx.get === 'function' ? ctx.get('webServer') : undefined) || ctx.webServer
+  if (webServer && typeof webServer.register === 'function') {
+    const readBody = (req) =>
+      new Promise((resolve) => {
+        let raw = ''
+        req.on('data', (chunk) => {
+          raw += chunk
+          if (raw.length > 64 * 1024) req.destroy()
+        })
+        req.on('end', () => resolve(raw))
+        req.on('error', () => resolve(''))
+      })
+    const sendJson = (res, code, payload) => {
+      res.statusCode = code
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.setHeader('cache-control', 'no-store')
+      res.end(JSON.stringify(payload))
+    }
+    // Every custom route must pass the browser-trust fence, otherwise any open
+    // page could rewrite the guard's switches.
+    const rejected = (req, res) => {
+      try {
+        const conn = (typeof ctx.get === 'function' ? ctx.get('connection') : undefined) || ctx.connection
+        if (!conn || typeof conn.requestRejection !== 'function') return false
+        const code = conn.requestRejection(req)
+        if (code === undefined || code === null || code === false) return false
+        res.statusCode = typeof code === 'number' ? code : 403
+        res.end()
+        return true
+      } catch {
+        return false
+      }
+    }
+    try {
+      webServer.register({
+        kind: 'exact',
+        path: '/dsh-write-guard/config',
+        handler: async (req, res) => {
+          if (rejected(req, res)) return
+          const method = (req.method || 'GET').toUpperCase()
+          if (method === 'GET') {
+            sendJson(res, 200, {
+              ok: true,
+              config: publicConfig(config),
+              available: availableSwitches(),
+              defaults: publicConfig(normalizeConfig({})),
+              file: runtimeConfigFile,
+              restartOnly: [...RESTART_ONLY],
+            })
+            return
+          }
+          if (method !== 'POST') {
+            sendJson(res, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          let payload
+          try {
+            const text = await readBody(req)
+            payload = text ? JSON.parse(text) : {}
+          } catch {
+            sendJson(res, 400, { ok: false, error: 'invalid json' })
+            return
+          }
+          try {
+            const set = payload?.set && typeof payload.set === 'object' && !Array.isArray(payload.set) ? payload.set : {}
+            const clear = Array.isArray(payload?.clear) ? payload.clear.map(String) : []
+            const result = saveRuntimeConfig(set, clear)
+            sendJson(res, 200, { ok: true, config: result.config, file: result.file, defaults: publicConfig(normalizeConfig({})) })
+          } catch (error) {
+            sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      })
+    } catch (error) {
+      ctx.logger?.warn?.(`write-guard: settings route not registered: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
 
   ctx.on('dispose', () => {
     // Returning the promise lets the host wait for the queued audit records
