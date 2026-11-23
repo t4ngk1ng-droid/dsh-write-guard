@@ -1,104 +1,104 @@
-# dsh-write-guard bundle patch: insert this plugin's loader entry into a
-# profile layer. Bundle patches add rows via `insert`; a top-level row would be
-# read as an id-targeted override of an existing entry and fail with
-# "entry not found".
+# dsh-write-guard：用 `insert` 将插件的 loader entry 加入 profile 层。
+# 不要将其改为顶层条目：顶层条目表示按 id 覆盖已有 entry；如果 entry
+# 不存在，加载会报
+# "entry not found"。
 #
-# Every config key is optional; defaults are applied by the plugin.
+# 所有配置项均可省略。未写的项采用插件默认值；允许的运行时覆盖优先于 profile。
 - insert:
     - id: write-guard
       name: dsh-write-guard
       config:
-        # enforce | dry-run | off
+        # enforce：执行判定；dry-run：记录但不拦；off：关闭写入防护。
         mode: enforce
-        # 0-100: >= block -> deny, >= ask -> approval seam
+        # 0-100：达到 blockThreshold 拒绝；达到 askThreshold 但未达拒绝线，交给审批链。
         blockThreshold: 70
         askThreshold: 40
 
-        # --- scan budget ---------------------------------------------------
-        # UTF-8 bytes scanned per write; beyond it the prefix is scanned and
-        # truncatePolicy decides (ask is the safe default).
+        # --- 扫描预算 ------------------------------------------------------
+        # 单次扫描的 UTF-8 字节预算。超过预算先扫前缀，再由 truncatePolicy
+        # 决定是否转审批；默认 ask。
         maxScanBytes: 524288
         truncatePolicy: ask
-        # Hard ceiling: a larger payload is never scanned, only asked about.
+        # 写前内容超过硬上限时不扫描，直接转审批。
         maxContentBytes: 33554432
-        # Post-write verification reads at most this many bytes.
+        # 写后最多读取这么多字节；调整 maxVerifyBytes 后需要重启。
         maxVerifyBytes: 8388608
 
-        # --- path policy ---------------------------------------------------
-        scriptPolicy: ask            # ask | allow | deny — bare .ps1/.bat/.cmd/.sh
-        docPolicy: downgrade         # downgrade | enforce — docs quoting commands
+        # --- 路径策略 ------------------------------------------------------
+        scriptPolicy: ask            # ask | allow | deny：裸脚本 .ps1/.bat/.cmd/.sh
+        docPolicy: downgrade         # downgrade | enforce：是否允许文档中的命令示例降级
         blockBinaries: true
-        # Paths that bypass every check. Empty by default: node_modules,
-        # .git hooks and build output are common malware drop locations too.
+        # 默认不排除路径；node_modules、.git 和构建产物也可能被写入。
+        # 只对确实要跳过内容扫描的路径设置例外，不要把它当成权限白名单。
         ignorePaths: []
 
-        # --- rules ---------------------------------------------------------
+        # --- 项目规则 ------------------------------------------------------
         allowRules: []
-        # Project rules file. Empty = discover write-guard.rules.json from the
-        # session cwd upward.
+        # 项目规则文件。留空时从会话 cwd 向上查找 write-guard.rules.json。
+        # watchRules 控制是否按文件变化重新加载。
         rulesFile: ''
         watchRules: true
 
-        # --- shell writes --------------------------------------------------
-        # Parse bash/pwsh commands for heredocs, echo/printf/tee, content
-        # cmdlets, downloads and archive extraction.
+        # --- Shell 写入 ----------------------------------------------------
+        # 识别 bash/pwsh 中常见的写入形式，包括 heredoc、echo/printf/tee、
+        # 内容 cmdlet、下载、解压以及复制/移动的目标。
         shellGuard: true
-        # ask | allow — policy when the bytes cannot be inspected (download,
-        # extract, tee, pipeline) or the target is dynamic/script/executable.
+        # ask | allow：按来源和目标判断内容未知的写入，例如下载、解压、
+        # tee 和管道输出；动态路径、脚本或可执行目标也参与判定。
         shellUnknownPolicy: ask
-        # Per-category switches for shell write detection. `false` stops that
-        # category from being reported at all — the write passes unscanned, so
-        # turn one off only when its noise outweighs the risk it covers.
+        # 只关闭开关对应的检测类别，不是将其改成“只记录”。
+        # 同一条命令里的其他写入仍会单独检查。
+        # 建议先从审计日志确认误报来源，再决定是否关闭。
         shellChecks:
-          redirect: true      # > / >> / &> into a file
-          echo: true          # echo / printf content into a file
-          heredoc: true       # heredoc and stdin-script bodies
+          redirect: true      # > / >> / &> 写入文件
+          echo: true          # echo / printf 内容写入
+          heredoc: true       # heredoc 与 stdin 脚本正文
           tee: true           # tee / Tee-Object
           download: true      # curl -o, iwr/irm -OutFile, certutil, bitsadmin
           extract: true       # tar / unzip / 7z / Expand-Archive
-          dotnet: true        # [IO.File]::WriteAllText and friends
+          dotnet: true        # [IO.File]::WriteAllText 等文件写入 API
           cmdlets: true       # Set-Content, Out-File, New-Item, Start-Process
           copy: true          # cp, mv, Copy-Item, Move-Item, dd of=
 
-        # --- post-write verification --------------------------------------
+        # --- 写后校验 ------------------------------------------------------
         verifyWrites: true
-        verifyPolicy: block          # block | audit — on hash mismatch
-        # Re-scan the complete file after an edit/append; a payload split
-        # across several writes only becomes visible here.
+        verifyPolicy: block          # block | audit：校验失败或重扫风险升级时阻断或只记录
+        # 对可读的完整文件重扫：多次 edit/append 拼出的内容可能只在最后出现。
+        # 默认阻断会反馈校验失败，不会自动删除或回滚已落盘的文件。
 
-        # --- content heuristics -------------------------------------------
+        # --- 内容检测 ------------------------------------------------------
         entropy: true
         entropyThreshold: 4.5
         entropyMinLength: 200
-        homoglyph: true              # fold Cyrillic/Greek confusables
-        # Per-category switches for content scanning. `false` drops the whole
-        # category before scoring. Project `custom` rules are exempt.
+        homoglyph: true              # 相似字符映射（西里尔/希腊字母）
+        # false 表示该类别不参与内容评分。
+        # 项目级 custom 规则不受类别开关影响。
         contentChecks:
-          download-execute: true     # fetch-and-run, IEX DownloadString
-          encoded-payload: true      # base64/hex blobs, high entropy
-          obfuscation: true          # string splicing, long unbroken lines
-          persistence: true          # Run keys, scheduled tasks, services
-          credential-theft: true     # browser stores, tokens, keylogging
-          reverse-shell: true        # netcat/socat/socket shells
-          defense-evasion: true      # AMSI/Defender tampering, logging off
-          privilege-escalation: true # UAC bypass, runas tricks
-          office-macro: true         # VBA auto-exec, DDE
-          archive: true              # extract-then-run
-          propagation: true          # copy to shares/USB, self-spread
-          magic: true                # PE/ELF/Mach-O/ZIP file headers
-          binary: true               # NUL and control bytes
-          double-extension: true     # invoice.pdf.exe
+          download-execute: true     # 下载后执行，例如 IEX DownloadString
+          encoded-payload: true      # base64/hex 编码串、高熵数据
+          obfuscation: true          # 字符串拼接、异常长行
+          persistence: true          # Run 键、计划任务、服务
+          credential-theft: true     # 浏览器凭证库、令牌、键盘记录
+          reverse-shell: true        # netcat/socat/socket 反弹 Shell
+          defense-evasion: true      # 关闭日志、干扰 AMSI/Defender
+          privilege-escalation: true # UAC 绕过、runas 相关特征
+          office-macro: true         # VBA 自动执行、DDE
+          archive: true              # 解压后运行
+          propagation: true          # 复制到共享目录或 USB 等传播行为
+          magic: true                # PE/ELF/Mach-O/ZIP 文件头
+          binary: true               # NUL 与二进制控制字节
+          double-extension: true     # 例如 invoice.pdf.exe
 
-        # --- evidence ------------------------------------------------------
+        # --- 证据 ----------------------------------------------------------
         quarantine: true
         audit: true
-        auditHashChain: true         # prev/hash on every audit record
+        auditHashChain: true         # 每条审计记录包含 prev/hash
         auditMaxBytes: 5242880
-        integrity: true              # fingerprint the plugin's own files
+        integrity: true              # 启动时核对插件文件指纹
 
-        # --- notifications -------------------------------------------------
+        # --- 通知 ----------------------------------------------------------
         notify: false
-        # Runs with WG_MESSAGE in the environment; the message is never
-        # interpolated into the command line.
+        # 通知文本通过环境变量 WG_MESSAGE 传给 notifyCommand，
+        # 不会拼进要执行的命令。命令本身请在可信 profile 中维护。
         notifyCommand: ''
         notifyMinScore: 70

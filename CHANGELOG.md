@@ -2,31 +2,31 @@
 
 ## 0.6.9
 
-- 设置页面板：DSH 设置 → 写入防护，全部开关可视化，保存后立即生效
-- 面板保存只写 diff，未改动的默认值和 profile 值不会被固化
-- 修复：profile 里设的同类开关被运行时覆盖冲掉
-- 运行时配置白名单：`notifyCommand`、`auditFile` 等路径/命令字段不再可改
-- 无效值在落盘前拒绝，不再"保存成功但没生效"
-- Shell 解析补 `sc`/`gc` 等 PowerShell 别名、`cp`/`mv`/`dd of=`/`Export-Csv`/`Copy-Item`
-- 字面量 `Invoke-Expression` 递归解析，动态表达式转人工
-- 三轮自审：畸形请求体、写盘失败回滚、面板字段漂移
+- 新增设置面板：在 **DSH 设置 → 写入防护** 调整检测类别和策略。多数开关即时生效，装载时读取的配置仍需重启。
+- 面板只保存相对读取值的差异（diff），不把未改动的默认值或 profile 值写入运行时文件。
+- 修复嵌套配置的继承：覆盖一个检测子项时，同组其他子项仍沿用 profile。
+- 收紧运行时配置白名单：`notifyCommand`、`auditFile` 等命令、路径字段只能通过 profile 配置。
+- 在落盘前拒绝无效值，避免显示“已保存”却按其他值运行。
+- 区分 PowerShell 的写入别名 `sc` 与只读别名 `gc`；增加 `cp`/`mv`/`dd of=`/`Export-Csv`/`Copy-Item` 等常见写入目标的识别。
+- `Invoke-Expression` 的字面量正文递归解析；动态表达式按未知写入策略处理，默认转审批。
+- 三轮自审覆盖畸形请求体、写盘失败时保留旧状态，以及面板字段与宿主配置的一致性。
 
 ## 0.5.1
 
-- `write_guard_config` 工具：在对话里直接改开关，不用编辑配置文件
+- 新增 `write_guard_config`：可以在对话中查看或修改运行时开关，无需手动编辑配置文件。
 
 ## 0.4.0
 
-- `contentChecks`：14 类内容检测各自独立开关
+- 新增 `contentChecks`：14 类内容检测可独立开关。
 
 ## 0.3.0
 
-- `shellChecks`：8 类 shell 写入检测各自独立开关
+- 新增 `shellChecks`：当时支持的 8 类 Shell 写入检测可独立开关。
 
 ## 0.2.4
 
-- 修复五组误拦：`cd` 后验错文件、搜索串里的 `Set-Content`、注释里的 `>`、`-WhatIf`、法语 `MZ` 被当 PE
+- 修复五组误拦：`cd` 后在错误的目录验文件；把搜索串里的 `Set-Content` 或注释里的 `>` 识别为写入；给 `-WhatIf` 预演登记文件；将以 `MZ` 开头的法语文本判为 PE。
 
 ## 0.2.1
 
-- 首版：pre-execute 扫描、post-execute 校验、哈希链审计、自校验
+- 首版提供 pre-execute 写前扫描、post-execute 写后校验、哈希链审计和插件自校验。
