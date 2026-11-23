@@ -72,9 +72,13 @@ write-guard（内容 + shell + 写后校验）
 
 第一次装建议先设 `dry-run` 跑一两天——所有写入照常执行，只在审计里记录"本来会拦什么"，确认没有误报再切 `enforce`。
 
-### 在 DSH 里直接改，不用碰配置文件
+### 在 DSH 设置里改
 
-对 Agent 说一句就行：
+装好后打开 **设置 → 写入防护**，所有开关都在里面：模式下拉、9 类 shell 检测、14 类内容检测、13 个其他开关。勾选完点保存，立即生效。
+
+### 也可以对 Agent 说一句
+
+不用打开设置页：
 
 > 「把解压检测关掉」
 > 「列出 write-guard 现在哪些开关是关的」
@@ -92,6 +96,7 @@ write-guard（内容 + shell + 写后校验）
       extract: true     # 解压
       tee: true
       cmdlets: true     # Set-Content / Out-File / New-Item
+      copy: true        # cp / mv / Copy-Item / dd of=
       redirect: true    # > / >>
       echo: true
       heredoc: true
