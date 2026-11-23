@@ -201,7 +201,13 @@ dsh plugin --profile web add file:./dsh-write-guard
 - **`write_guard_reload()`** — 重新加载项目规则文件
 - **`write_guard_verify_chain(file?)`** — 校验审计哈希链，报告第一条断链
 
-### 在 DSH 里改开关
+### 在设置页改开关
+
+DSH 设置 → **写入防护**，按类别勾选即可。改完点「保存」，立即生效（`audit`/`quarantine`/`notify`/`integrity` 需重启）。
+
+面板走 `/dsh-write-guard/config` 路由，和下面这个工具共用同一套合并逻辑，两边不会打架。
+
+### 在对话里改开关
 
 不用编辑 YAML。直接对 Agent 说：
 
