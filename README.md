@@ -2,7 +2,7 @@
 
 **DeepSeek Harness 的文件写入防护插件。** 路径规则可以允许 Agent 写 `setup.ps1`，却无法区分普通安装步骤和下载后立即执行的代码。dsh-write-guard 在写入前检查内容，在写入后读回可定位的文件，核对实际落盘结果。
 
-适用于会让 Agent 改代码、写脚本或运行 Shell 的 DSH 用户。插件使用 Node.js 内置模块，要求 Node.js >= 20.0.0，零运行时依赖。**[从仓库安装](#安装)**：支持 web profile 和桌面版，尚未上架 npm 或插件市场。初次试用建议先开 `dry-run`。
+适用于会让 Agent 改代码、写脚本或运行 Shell 的 DSH 用户。插件使用 Node.js 内置模块，要求 Node.js >= 20.0.0，零运行时依赖。**[安装](#安装)**：`dsh plugin add dsh-write-guard`，或从仓库安装。初次试用建议先开 `dry-run`。
 
 > 它检查的是提示注入或误操作可能造成的**文件写入后果**，不判断提示词是否恶意，也不替代杀毒软件。写后阻断不会自动回滚文件。
 
@@ -57,7 +57,13 @@ tools/post-execute
 
 ## 安装
 
-**Web profile：** 从仓库安装，无需等待 npm 或插件市场上架：
+**Web profile：** 从 npm 安装：
+
+```bash
+dsh plugin --profile web add dsh-write-guard
+```
+
+或从仓库安装（想跟最新提交时）：
 
 ```bash
 git clone https://github.com/t4ngk1ng-droid/dsh-write-guard.git
