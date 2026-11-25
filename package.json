@@ -1,6 +1,6 @@
 {
   "name": "dsh-write-guard",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "Content-aware file write protection for DeepSeek Harness agents: scan proposed writes and shell output targets, verify direct writes by hash, and rescan files after edits. Includes project rules, hash-chained audit logs, and plugin integrity checks. 为 DeepSeek Harness 的 Agent 检查写入内容和 Shell 写入目标，写后校验并重扫，支持项目规则、哈希链审计和插件自校验。",
   "type": "module",
   "main": "index.js",
