@@ -51,7 +51,12 @@
     "malware",
     "guard",
     "quarantine",
-    "content-scan"
+    "content-scan",
+    "powershell",
+    "agent-security",
+    "guardrails",
+    "file-integrity",
+    "audit-log"
   ],
   "author": "T4ngK1ng",
   "repository": {
